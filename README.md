@@ -36,6 +36,7 @@ current audio file.
 
 - Ubuntu/Linux
 - NVIDIA GPU recommended (a 24 GB RTX 3090 is suitable for this 0.6B model)
+- Miniconda or Anaconda (`conda` available on `PATH`)
 - Python >= 3.12
 - a recent NVIDIA driver compatible with the PyTorch CUDA wheel you install
 - an NVIDIA NGC account for the trainable zh-CN model artifact
@@ -48,7 +49,17 @@ for the bring-your-own PyTorch/CUDA installation route.
 ```bash
 cd parakeet_ctcws_hotword
 bash scripts/install.sh
-source .venv/bin/activate
+source path.sh
+```
+
+Stage 0 creates the Conda environment `parakeet_ctcws` with Python 3.12.
+`path.sh` is the single place that activates this environment. To use another
+environment name, set `CONDA_ENV_NAME` consistently before install/run:
+
+```bash
+export CONDA_ENV_NAME=my_parakeet_env
+bash scripts/install.sh
+source path.sh
 ```
 
 If you need a particular CUDA PyTorch wheel, set its index explicitly before
@@ -135,7 +146,7 @@ the current ground truth. After the benchmark is corrected, you can instead use:
 Run two recordings first:
 
 ```bash
-source .venv/bin/activate
+source path.sh
 CUDA_VISIBLE_DEVICES=0 python -m hotword_asr.benchmark \
   --benchmark-dir hotword_benchmark \
   --model models \
@@ -159,13 +170,17 @@ Stages:
 
 | stage | action |
 |---:|---|
-| 0 | create `.venv` and install Python dependencies |
+| 0 | `conda create` the Python 3.12 environment and install dependencies |
 | 1 | download the trainable zh-CN Parakeet `.nemo` model from NGC |
 | 2 | run raw ASR + CTC-WS + merged ASR |
 | 3 | run the benchmark's own `evaluate.py` on raw and merged outputs |
 
 Already completed per-audio inference is skipped. Add `--overwrite` when calling
 `python -m hotword_asr.benchmark` directly if you intentionally want to recompute it.
+
+`run.sh` sources `path.sh` after stage 0, so stages 1-3 always run inside the
+same Conda environment. When starting directly from `--stage 1`, `--stage 2`,
+or `--stage 3`, that environment must already have been created once by stage 0.
 
 ## 8. Run one audio file
 

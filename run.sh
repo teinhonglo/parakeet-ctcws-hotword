@@ -2,8 +2,6 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-venv_dir="${VENV_DIR:-${project_root}/.venv}"
-source "${project_root}/path.sh"
 
 stage=0
 stop_stage=3
@@ -30,7 +28,7 @@ if (( stage <= 0 && stop_stage >= 0 )); then
   "${project_root}/scripts/install.sh"
 fi
 
-source "${venv_dir}/bin/activate"
+source "${project_root}/path.sh"
 
 if (( stage <= 1 && stop_stage >= 1 )); then
   if ! find "${project_root}/models" -type f -name '*.nemo' -print -quit 2>/dev/null | grep -q .; then

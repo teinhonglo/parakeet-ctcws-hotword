@@ -2,21 +2,35 @@
 set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-venv_dir="${VENV_DIR:-${project_root}/.venv}"
-python_bin="${PYTHON_BIN:-python3}"
+conda_env_name="${CONDA_ENV_NAME:-parakeet_ctcws}"
 
-"${python_bin}" - <<'PY'
+if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
+  conda_exe="${CONDA_EXE}"
+elif command -v conda >/dev/null 2>&1; then
+  conda_exe="$(command -v conda)"
+else
+  echo "conda was not found. Install Miniconda or Anaconda first." >&2
+  exit 1
+fi
+
+conda_base="$("${conda_exe}" info --base)"
+source "${conda_base}/etc/profile.d/conda.sh"
+
+if conda env list | awk -v env="${conda_env_name}" '$1 == env {found=1} END {exit !found}'; then
+  echo "Conda environment exists, reuse: ${conda_env_name}"
+else
+  conda create -y -n "${conda_env_name}" python=3.12 pip
+fi
+
+conda activate "${conda_env_name}"
+
+python - <<'PY'
 import sys
 if sys.version_info < (3, 12):
     raise SystemExit("Python >= 3.12 is required by current NeMo Speech")
 print("Python:", sys.version.split()[0])
 PY
 
-if [[ ! -d "${venv_dir}" ]]; then
-  "${python_bin}" -m venv "${venv_dir}"
-fi
-
-source "${venv_dir}/bin/activate"
 python -m pip install --upgrade pip setuptools wheel
 
 if ! python -c 'import torch, torchaudio' >/dev/null 2>&1; then
@@ -38,4 +52,4 @@ print("CUDA available:", torch.cuda.is_available())
 print("NeMo CTC-WS import: OK")
 PY
 
-echo "Environment ready: ${venv_dir}"
+echo "Conda environment ready: ${conda_env_name}"
