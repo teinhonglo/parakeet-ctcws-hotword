@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "parakeet-ctcws-hotword"
+version = "0.1.0"
+description = "Mandarin-English Parakeet CTC ASR with NeMo CTC word spotting"
+requires-python = ">=3.12"
+
+[tool.setuptools.packages.find]
+include = ["hotword_asr*"]

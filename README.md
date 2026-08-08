@@ -1,0 +1,282 @@
+# Mandarin-English ASR + CTC Word Spotter
+
+This project runs a Mandarin-English CTC ASR model and NVIDIA NeMo's CTC-based
+Word Spotter (CTC-WS) on the 71-file hospital hotword benchmark.
+
+Default target model:
+
+- `nvidia/riva/parakeet-ctc-riva-0-6b-unified-zh-cn:trainable_v3.0`
+- FastConformer-CTC, about 600M parameters
+- Mandarin + English code-switching
+- 7000-subword vocabulary
+
+The important detail is that CTC-WS needs the acoustic model's **frame-level CTC
+log probabilities**. The hosted/NIM transcription API returns transcription
+results, not the internal `[time, vocabulary]` matrix needed by `run_word_spotter`.
+For this reason the project downloads NVIDIA's **trainable `.nemo` acoustic
+checkpoint** from NGC and runs it locally with NeMo.
+
+## Pipeline
+
+```text
+wav
+  -> Parakeet FastConformer-CTC
+  -> CTC log probabilities
+       |-> greedy CTC ASR ---------------------> raw_asr
+       `-> ContextGraphCTC -> run_word_spotter
+                              -> merge_alignment_with_ws_hyps
+                              -> ctcws_asr + predicted_keywords.json
+```
+
+The context graph is built **once from the global 139-hotword vocabulary** and
+reused for every recording. It never receives the ground-truth hotwords for the
+current audio file.
+
+## 1. System requirements
+
+- Ubuntu/Linux
+- NVIDIA GPU recommended (a 24 GB RTX 3090 is suitable for this 0.6B model)
+- Python >= 3.12
+- a recent NVIDIA driver compatible with the PyTorch CUDA wheel you install
+- an NVIDIA NGC account for the trainable zh-CN model artifact
+
+Current NeMo Speech documentation requires Python >= 3.12 and PyTorch >= 2.7
+for the bring-your-own PyTorch/CUDA installation route.
+
+## 2. Install Python environment
+
+```bash
+cd parakeet_ctcws_hotword
+bash scripts/install.sh
+source .venv/bin/activate
+```
+
+If you need a particular CUDA PyTorch wheel, set its index explicitly before
+running the installer. For example, use the index appropriate for the NVIDIA
+driver installed on your machine:
+
+```bash
+TORCH_INDEX_URL=https://download.pytorch.org/whl/cu129 bash scripts/install.sh
+```
+
+If PyTorch + torchaudio are already installed in the chosen environment, the
+installer keeps them and only installs NeMo and this project.
+
+## 3. Install/configure NGC CLI
+
+The included installer pins NGC CLI 4.34.10 and verifies NVIDIA's published
+SHA256 before installing it under this project:
+
+```bash
+bash scripts/install_ngc_cli.sh
+export PATH="$PWD/.tools/ngc-cli:$PATH"
+ngc config set
+```
+
+`ngc config set` asks for your NGC API key. Do not put the key in this repository.
+
+## 4. Download the Mandarin-English Parakeet checkpoint
+
+```bash
+bash scripts/download_model.sh
+```
+
+Equivalent NGC command:
+
+```bash
+ngc registry model download-version \
+  "nvidia/riva/parakeet-ctc-riva-0-6b-unified-zh-cn:trainable_v3.0" \
+  --dest models
+```
+
+The inference loader searches the downloaded directory for the `.nemo`
+checkpoint and restores its original NeMo model class.
+
+## 5. Prepare the hospital benchmark
+
+Unzip the supplied `hotword_benchmark.zip` so this project can see:
+
+```text
+hotword_benchmark/
+  audio/<id>.wav
+  hotwords.json
+  all_hotwords.json
+  pseudo_transcripts.json
+  evaluate.py
+```
+
+Validate it first:
+
+```bash
+python -m hotword_asr.validate_benchmark hotword_benchmark
+```
+
+For the zip supplied on 2026-08-08, the expected counts are:
+
+- 71 WAV files
+- 139 unique target hotwords
+- 198 `(audio, hotword)` target instances
+
+There is currently one vocabulary inconsistency in the supplied package:
+`hotwords.json` contains `elbew`, while `all_hotwords.json` contains `elbow`.
+The benchmark runner reports this instead of silently changing the data.
+
+By default the runner builds the global vocabulary from the **union of all
+`hotwords.json` entries**. This is still one global 139-word list for all 71
+recordings, not a per-file oracle, and keeps the spotting labels consistent with
+the current ground truth. After the benchmark is corrected, you can instead use:
+
+```bash
+--vocabulary-source all-hotwords
+```
+
+## 6. Smoke test
+
+Run two recordings first:
+
+```bash
+source .venv/bin/activate
+CUDA_VISIBLE_DEVICES=0 python -m hotword_asr.benchmark \
+  --benchmark-dir hotword_benchmark \
+  --model models \
+  --output-dir exp/smoke \
+  --limit 2
+```
+
+## 7. Full benchmark
+
+The convenient staged runner follows the usual `stage/stop_stage` pattern:
+
+```bash
+bash run.sh \
+  --stage 2 \
+  --stop-stage 3 \
+  --gpuid 0 \
+  --benchmark-dir /path/to/hotword_benchmark
+```
+
+Stages:
+
+| stage | action |
+|---:|---|
+| 0 | create `.venv` and install Python dependencies |
+| 1 | download the trainable zh-CN Parakeet `.nemo` model from NGC |
+| 2 | run raw ASR + CTC-WS + merged ASR |
+| 3 | run the benchmark's own `evaluate.py` on raw and merged outputs |
+
+Already completed per-audio inference is skipped. Add `--overwrite` when calling
+`python -m hotword_asr.benchmark` directly if you intentionally want to recompute it.
+
+## 8. Run one audio file
+
+```bash
+python -m hotword_asr.infer \
+  --audio hotword_benchmark/audio/534.wav \
+  --hotwords hotword_benchmark/all_hotwords.json \
+  --model models \
+  --output exp/534.json
+```
+
+The JSON contains:
+
+- `raw_text`: greedy Parakeet CTC transcription
+- `merged_text`: ASR after CTC-WS merge
+- `predicted_hotwords`: canonical hotwords detected by CTC-WS
+- `spotted`: individual CTC-WS hypotheses and chunk metadata
+- `timing`: ASR time, spotting/merge time and RTF
+- `runtime`: process/GPU peak-memory measurements for single-file inference
+
+## 9. Benchmark outputs
+
+`exp/parakeet_ctcws/` contains:
+
+```text
+raw_asr/<id>/transcription.json
+ctcws_asr/<id>/transcription.json
+details/<id>.json
+predicted_keywords.json
+ctcws_text_variants.json
+benchmark_vocabulary_check.json
+runtime_metrics.json
+report_raw_asr.xlsx
+report_ctcws_asr.xlsx
+```
+
+The original benchmark evaluator therefore computes:
+
+- raw ASR: MER vs. pseudo transcript + hotword recall
+- merged ASR: MER vs. pseudo transcript + hotword recall
+- CTC-WS predictions: hotword precision / recall / F1
+
+`runtime_metrics.json` additionally records:
+
+- wall-clock time
+- total audio duration
+- real-time factor (RTF)
+- x-real-time throughput
+- peak process RSS
+- peak CUDA allocated memory
+- peak CUDA reserved memory
+
+Model loading is outside the RTF timer. This makes the number represent steady
+inference cost rather than download/initialization cost.
+
+## 10. CTC-WS parameters
+
+Defaults follow NVIDIA's NeMo CTC-WS tutorial:
+
+```text
+beam_threshold       = 7.0
+context_score        = 3.0
+ctc_ali_token_weight = 0.5
+```
+
+Tune on a development subset rather than on the final 71-file test set. Example:
+
+```bash
+python -m hotword_asr.benchmark \
+  --benchmark-dir hotword_benchmark \
+  --model models \
+  --beam-threshold 8.0 \
+  --context-score 4.0 \
+  --ctc-ali-token-weight 0.6 \
+  --output-dir exp/tune_b8_c4_a06
+```
+
+For English medical terms the project automatically adds conservative
+alternative graph paths for case, hyphen/space variants and spelled acronyms.
+The CTC-WS output always maps these paths back to the canonical benchmark word.
+Extra domain-specific pronunciations can be supplied through an aliases JSON:
+
+```json
+{
+  "Mixtard": ["mix tard"],
+  "X-RAY": ["x ray"]
+}
+```
+
+Then pass `--aliases my_aliases.json`. The included
+`config/hotword_aliases.json` is intentionally empty so no benchmark label is
+silently corrected.
+
+## 11. Long recordings
+
+Some hospital recordings are several minutes long. Feeding a whole long file to
+a 0.6B FastConformer at once can cause unnecessary GPU-memory growth. The runner
+therefore uses non-overlapping 30-second chunks by default and batches chunks for
+the acoustic model:
+
+```bash
+--chunk-seconds 30 --batch-size 8
+```
+
+The same CTC-WS graph is reused for every chunk. Non-overlapping chunks keep the
+final transcript free of overlap duplicates. A keyword that lands exactly on a
+chunk boundary can theoretically be missed, so chunk length is configurable.
+
+## References
+
+- NVIDIA Mandarin-English Parakeet collection: <https://catalog.ngc.nvidia.com/orgs/nvidia/collections/parakeet-ctc-0.6b-zh-cn>
+- NVIDIA NeMo CTC-WS tutorial: <https://github.com/NVIDIA-NeMo/Speech/blob/main/tutorials/asr/ASR_Context_Biasing.ipynb>
+- NeMo Speech installation: <https://github.com/NVIDIA-NeMo/Speech>
+- NGC CLI documentation: <https://docs.ngc.nvidia.com/cli/cmd.html>
