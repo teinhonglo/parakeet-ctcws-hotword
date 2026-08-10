@@ -44,6 +44,9 @@ def load_ctc_model(model_spec: str | Path, device: str = "cuda") -> Any:
     model.eval()
     model.freeze()
 
+    if hasattr(model, "ctc_decoder"):
+        model.change_decoding_strategy(decoder_type="ctc")
+
     if not hasattr(model, "decoding") or not hasattr(model.decoding, "blank_id"):
         raise TypeError("Selected NeMo model does not expose a CTC decoding.blank_id")
     return model
