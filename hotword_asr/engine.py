@@ -11,6 +11,7 @@ import soundfile as sf
 import torch
 
 from .hotwords import context_transcripts
+from .text_normalization import to_taiwan_traditional
 
 
 @dataclass
@@ -214,11 +215,16 @@ class CTCWordSpotterASR:
                 merged_parts.append(str(merged_text or ""))
                 spotting_seconds += time.perf_counter() - t1
 
+        raw_text_model = " ".join(x.strip() for x in raw_parts if x.strip())
+        merged_text_model = " ".join(x.strip() for x in merged_parts if x.strip())
+
         return {
             "audio_path": str(audio_path),
             "duration_sec": round(duration, 4),
-            "raw_text": " ".join(x.strip() for x in raw_parts if x.strip()),
-            "merged_text": " ".join(x.strip() for x in merged_parts if x.strip()),
+            "raw_text": to_taiwan_traditional(raw_text_model),
+            "merged_text": to_taiwan_traditional(merged_text_model),
+            "raw_text_model": raw_text_model,
+            "merged_text_model": merged_text_model,
             "predicted_hotwords": sorted(set(predicted), key=str.casefold),
             "spotted": spotted,
             "timing": {
@@ -230,5 +236,8 @@ class CTCWordSpotterASR:
                 else None,
             },
             "ctcws_config": asdict(self.config),
+            "text_normalization": {
+                "ctc_graph": "tw2s",
+                "output": "s2tw",
+            },
         }
-

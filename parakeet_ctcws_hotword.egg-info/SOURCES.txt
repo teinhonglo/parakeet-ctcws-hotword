@@ -1,0 +1,17 @@
+README.md
+pyproject.toml
+hotword_asr/__init__.py
+hotword_asr/benchmark.py
+hotword_asr/engine.py
+hotword_asr/hotwords.py
+hotword_asr/infer.py
+hotword_asr/io.py
+hotword_asr/metrics.py
+hotword_asr/model.py
+hotword_asr/validate_benchmark.py
+parakeet_ctcws_hotword.egg-info/PKG-INFO
+parakeet_ctcws_hotword.egg-info/SOURCES.txt
+parakeet_ctcws_hotword.egg-info/dependency_links.txt
+parakeet_ctcws_hotword.egg-info/top_level.txt
+tests/test_hotwords.py
+tests/test_io.py

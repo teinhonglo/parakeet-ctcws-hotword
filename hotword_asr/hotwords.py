@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .text_normalization import to_simplified_chinese
+
 
 ASCII_ALPHA_RE = re.compile(r"[A-Za-z]")
 
@@ -133,8 +135,11 @@ def context_transcripts(
     used_variants: dict[str, list[str]] = {}
 
     for canonical in hotwords:
-        variants = automatic_variants(canonical) if add_automatic_variants else [canonical]
-        variants.extend(aliases.get(canonical, []))
+        # Keep the benchmark's Taiwan-Traditional label as the canonical output,
+        # but search zh-CN CTC posteriors with Simplified-Chinese token paths.
+        graph_text = to_simplified_chinese(canonical)
+        variants = automatic_variants(graph_text) if add_automatic_variants else [graph_text]
+        variants.extend(to_simplified_chinese(alias) for alias in aliases.get(canonical, []))
         variants = _dedupe(variants)
 
         id_sequences: list[list[int]] = []
@@ -156,4 +161,3 @@ def context_transcripts(
         used_variants[canonical] = kept_text
 
     return graph_entries, used_variants
-

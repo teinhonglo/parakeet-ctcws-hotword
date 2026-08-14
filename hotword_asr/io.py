@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .text_normalization import to_taiwan_traditional
+
 
 def write_json(path: str | Path, data: Any) -> None:
     path = Path(path)
@@ -15,5 +17,7 @@ def write_json(path: str | Path, data: Any) -> None:
 
 def write_transcription(candidate_root: str | Path, audio_id: str, text: str) -> None:
     # Matches hotword_benchmark/evaluate.py exactly.
-    write_json(Path(candidate_root) / audio_id / "transcription.json", {"text": text})
-
+    write_json(
+        Path(candidate_root) / audio_id / "transcription.json",
+        {"text": to_taiwan_traditional(text)},
+    )

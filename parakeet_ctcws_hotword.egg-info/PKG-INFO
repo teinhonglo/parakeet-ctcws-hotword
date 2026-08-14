@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: parakeet-ctcws-hotword
+Version: 0.1.0
+Summary: Mandarin-English Parakeet CTC ASR with NeMo CTC word spotting
+Requires-Python: >=3.12
