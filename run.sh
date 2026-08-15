@@ -12,7 +12,8 @@ exp_dir="${project_root}/exp/parakeet_ctcws"
 nemotron_model="nvidia/nemotron-3.5-asr-streaming-0.6b"
 nemotron_exp_dir="${project_root}/exp/nemotron_gpu_pb"
 nemotron_target_lang="zh-CN"
-vocabulary_source="ground-truth-union"
+ground_truth_vocabulary_source="ground-truth-union"
+phrase_boosting_vocabulary_source="all-hotwords"
 nemotron_boosting_tree_alpha=1.0
 nemotron_boosting_context_score=1.0
 nemotron_boosting_depth_scaling=2.0
@@ -32,20 +33,27 @@ if (( stage <= 1 && stop_stage >= 1 )); then
 fi
 
 if (( stage <= 2 && stop_stage >= 2 )); then
-  infer_args=(
-    --benchmark-dir "${benchmark_dir}"
-    --model "${model}"
-    --output-dir "${exp_dir}"
-    --device cuda
-    --vocabulary-source "${vocabulary_source}"
-  )
-  if [[ -n "${limit}" ]]; then
-    infer_args+=(--limit "${limit}")
-  fi
-  if ${overwrite}; then
-    infer_args+=(--overwrite)
-  fi
-  CUDA_VISIBLE_DEVICES="${gpuid}" python -m hotword_asr.benchmark "${infer_args[@]}"
+  for vocabulary_name in ground_truth_union phrase_boosting_vocabulary; do
+    if [[ "${vocabulary_name}" == ground_truth_union ]]; then
+      vocabulary_source="${ground_truth_vocabulary_source}"
+    else
+      vocabulary_source="${phrase_boosting_vocabulary_source}"
+    fi
+    infer_args=(
+      --benchmark-dir "${benchmark_dir}"
+      --model "${model}"
+      --output-dir "${exp_dir}/${vocabulary_name}"
+      --device cuda
+      --vocabulary-source "${vocabulary_source}"
+    )
+    if [[ -n "${limit}" ]]; then
+      infer_args+=(--limit "${limit}")
+    fi
+    if ${overwrite}; then
+      infer_args+=(--overwrite)
+    fi
+    CUDA_VISIBLE_DEVICES="${gpuid}" python -m hotword_asr.benchmark "${infer_args[@]}"
+  done
 fi
 
 if (( stage <= 3 && stop_stage >= 3 )); then
@@ -53,26 +61,36 @@ if (( stage <= 3 && stop_stage >= 3 )); then
 fi
 
 if (( stage <= 4 && stop_stage >= 4 )); then
-  nemotron_args=(
-    --benchmark-dir "${benchmark_dir}"
-    --model "${nemotron_model}"
-    --output-dir "${nemotron_exp_dir}"
-    --device cuda
-    --target-lang "${nemotron_target_lang}"
-    --vocabulary-source "${vocabulary_source}"
-    --boosting-tree-alpha "${nemotron_boosting_tree_alpha}"
-    --boosting-context-score "${nemotron_boosting_context_score}"
-    --boosting-depth-scaling "${nemotron_boosting_depth_scaling}"
-    --boosting-bpe-mode "${nemotron_boosting_bpe_mode}"
-  )
-  if [[ -n "${limit}" ]]; then
-    nemotron_args+=(--limit "${limit}")
-  fi
-  if ${overwrite}; then
-    nemotron_args+=(--overwrite)
-  fi
-  CUDA_VISIBLE_DEVICES="${gpuid}" \
-    python -m hotword_asr.nemotron_benchmark "${nemotron_args[@]}"
+  for vocabulary_name in ground_truth_union phrase_boosting_vocabulary; do
+    if [[ "${vocabulary_name}" == ground_truth_union ]]; then
+      vocabulary_source="${ground_truth_vocabulary_source}"
+      condition=both
+    else
+      vocabulary_source="${phrase_boosting_vocabulary_source}"
+      condition=gpu-pb
+    fi
+    nemotron_args=(
+      --benchmark-dir "${benchmark_dir}"
+      --model "${nemotron_model}"
+      --output-dir "${nemotron_exp_dir}/${vocabulary_name}"
+      --device cuda
+      --target-lang "${nemotron_target_lang}"
+      --vocabulary-source "${vocabulary_source}"
+      --condition "${condition}"
+      --boosting-tree-alpha "${nemotron_boosting_tree_alpha}"
+      --boosting-context-score "${nemotron_boosting_context_score}"
+      --boosting-depth-scaling "${nemotron_boosting_depth_scaling}"
+      --boosting-bpe-mode "${nemotron_boosting_bpe_mode}"
+    )
+    if [[ -n "${limit}" ]]; then
+      nemotron_args+=(--limit "${limit}")
+    fi
+    if ${overwrite}; then
+      nemotron_args+=(--overwrite)
+    fi
+    CUDA_VISIBLE_DEVICES="${gpuid}" \
+      python -m hotword_asr.nemotron_benchmark "${nemotron_args[@]}"
+  done
 fi
 
 if (( stage <= 5 && stop_stage >= 5 )); then
