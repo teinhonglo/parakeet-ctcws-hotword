@@ -355,11 +355,6 @@ the phrase-boosting-vocabulary condition uses `all-hotwords` to consume
 `all_hotwords.json` verbatim. When invoking either Python module directly,
 select one policy with `--vocabulary-source`.
 
-The checkpoint's serialized OmegaConf decoding configuration may omit the
-optional `greedy.boosting_tree` node. The Nemotron runner creates that node when
-GPU-PB is selected; its absence does not by itself mean that NeMo must be
-reinstalled.
-
 ## 12. Long recordings
 
 Some hospital recordings are several minutes long. Feeding a whole long file to
