@@ -129,8 +129,10 @@ def load_model(model_name: str, device: str) -> Any:
 def prepare_gpu_pb_hotwords(
     vocabulary: list[str],
     output_dir: Path,
+    converter: Any | None = None,
 ) -> tuple[Path, list[str], str]:
-    simplified = [to_simplified_chinese(word) for word in vocabulary]
+    convert = converter.convert if converter is not None else to_simplified_chinese
+    simplified = [convert(word) for word in vocabulary]
     if not all(word.strip() for word in simplified):
         raise ValueError("Traditional-to-Simplified conversion produced an empty hotword")
 
@@ -176,20 +178,34 @@ def configure_greedy_decoding(
         with open_dict(decoding):
             decoding.strategy = "greedy_batch"
             # NeMo places alpha on greedy, while phrase construction options are
-            # nested under greedy.boosting_tree.
+            # nested under greedy.boosting_tree. Some Nemotron checkpoints omit
+            # that optional node from their serialized decoding config even when
+            # the installed NeMo decoder supports GPU-PB, so create it on demand.
             decoding.greedy.boosting_tree_alpha = 0.0
             if phrase_file is not None:
-                decoding.greedy.boosting_tree.key_phrases_file = str(phrase_file)
-                decoding.greedy.boosting_tree.context_score = context_score
-                decoding.greedy.boosting_tree.depth_scaling = depth_scaling
-                decoding.greedy.boosting_tree.bpe_mode = bpe_mode
+                try:
+                    boosting_tree = decoding.greedy.boosting_tree
+                except (AttributeError, KeyError):
+                    decoding.greedy.boosting_tree = {}
+                    boosting_tree = decoding.greedy.boosting_tree
+
+                tree_values = {
+                    "key_phrases_file": str(phrase_file),
+                    "context_score": context_score,
+                    "depth_scaling": depth_scaling,
+                    "bpe_mode": bpe_mode,
+                }
+                for key, value in tree_values.items():
+                    if isinstance(boosting_tree, dict):
+                        boosting_tree[key] = value
+                    else:
+                        setattr(boosting_tree, key, value)
                 decoding.greedy.boosting_tree_alpha = boosting_tree_alpha
         model.change_decoding_strategy(decoding)
     except (AttributeError, KeyError, TypeError) as error:
         raise RuntimeError(
-            "The installed NeMo build does not expose the documented RNNT GPU-PB "
-            "configuration. Re-run scripts/install.sh to install the required "
-            "NeMo main-branch version."
+            "NeMo rejected the RNNT GPU-PB decoding configuration. Verify that "
+            "the active environment uses a NeMo build with GPU-PB support."
         ) from error
 
 

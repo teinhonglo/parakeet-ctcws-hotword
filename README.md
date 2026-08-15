@@ -188,10 +188,10 @@ Stages:
 |---:|---|
 | 0 | `conda create` the Python 3.12 environment and install dependencies |
 | 1 | download the trainable zh-CN Parakeet `.nemo` model from NGC |
-| 2 | run raw ASR + CTC-WS + merged ASR |
-| 3 | run the benchmark's own `evaluate.py` on raw and merged outputs |
-| 4 | run Nemotron baseline + GPU-PB with Traditional/Simplified conversion |
-| 5 | run the same `evaluate.py` on Nemotron baseline and GPU-PB outputs |
+| 2 | run Parakeet raw ASR and CTC-WS with both vocabulary policies |
+| 3 | evaluate raw ASR and both Parakeet CTC-WS results |
+| 4 | run Nemotron baseline and GPU-PB with both vocabulary policies |
+| 5 | evaluate baseline and both Nemotron GPU-PB results |
 
 Already completed per-audio inference is skipped. Add `--overwrite` when calling
 `python -m hotword_asr.benchmark` directly if you intentionally want to recompute it.
@@ -206,8 +206,8 @@ bash run.sh \
   --benchmark-dir /path/to/hotword_benchmark
 ```
 
-The default remains `stop_stage=3`, so existing Parakeet runs do not
-automatically start the additional Nemotron experiment.
+The default runs through stage 5. Set `--stop-stage 3` to omit the Nemotron
+experiment.
 
 `run.sh` sources `path.sh` after stage 0, so stages 1-5 always run inside the
 same Conda environment. When starting directly from `--stage 1`, `--stage 2`,
@@ -235,18 +235,21 @@ The JSON contains:
 
 ## 9. Benchmark outputs
 
-`exp/parakeet_ctcws/` contains:
+`exp/parakeet_ctcws/` contains the baseline report plus separate CTC-WS runs
+for the ground-truth union and phrase-boosting (`all_hotwords.json`)
+vocabularies:
 
 ```text
-raw_asr/<id>/transcription.json
-ctcws_asr/<id>/transcription.json
-details/<id>.json
-predicted_keywords.json
-ctcws_text_variants.json
-benchmark_vocabulary_check.json
-runtime_metrics.json
+ground_truth_union/raw_asr/<id>/transcription.json
+ground_truth_union/ctcws_asr/<id>/transcription.json
+ground_truth_union/details/<id>.json
+ground_truth_union/predicted_keywords.json
+phrase_boosting_vocabulary/ctcws_asr/<id>/transcription.json
+phrase_boosting_vocabulary/details/<id>.json
+phrase_boosting_vocabulary/predicted_keywords.json
 report_raw_asr.xlsx
-report_ctcws_asr.xlsx
+report_ctcws_ground_truth_union_asr.xlsx
+report_ctcws_phrase_boosting_vocabulary_asr.xlsx
 ```
 
 The original benchmark evaluator therefore computes:
@@ -268,21 +271,20 @@ The original benchmark evaluator therefore computes:
 Model loading is outside the RTF timer. This makes the number represent steady
 inference cost rather than download/initialization cost.
 
-Nemotron results are written to `exp/nemotron_gpu_pb/`:
+Nemotron results are written to `exp/nemotron_gpu_pb/` using the same two
+vocabulary policies. The baseline is produced only in the ground-truth-union
+run because it does not use phrase boosting:
 
 ```text
-raw_asr/<id>/transcription.json
-gpu_pb_asr/<id>/transcription.json
-raw_zh_cn/baseline/<id>/transcription.json
-raw_zh_cn/gpu_pb/<id>/transcription.json
-details/baseline/<id>.json
-details/gpu_pb/<id>.json
-gpu_pb_hotwords.zh_cn.txt
-hotword_conversion_zh_tw_to_zh_cn.json
-run_config.json
-runtime_metrics.json
+ground_truth_union/raw_asr/<id>/transcription.json
+ground_truth_union/gpu_pb_asr/<id>/transcription.json
+ground_truth_union/details/baseline/<id>.json
+ground_truth_union/details/gpu_pb/<id>.json
+phrase_boosting_vocabulary/gpu_pb_asr/<id>/transcription.json
+phrase_boosting_vocabulary/details/gpu_pb/<id>.json
 report_raw_asr.xlsx
-report_gpu_pb_asr.xlsx
+report_gpu_pb_ground_truth_union_asr.xlsx
+report_gpu_pb_phrase_boosting_vocabulary_asr.xlsx
 ```
 
 ## 10. CTC-WS parameters
@@ -347,10 +349,16 @@ bash run.sh \
   --gpuid 0
 ```
 
-Both Parakeet CTC-WS and Nemotron GPU-PB use the same
-`--vocabulary-source` setting from `run.sh`, which defaults to the current
-project policy `ground-truth-union`. Set it to `all-hotwords` to use the JSON
-list verbatim for both systems.
+The staged runner evaluates both vocabulary policies for Parakeet CTC-WS and
+Nemotron GPU-PB: `ground-truth-union` uses the union of benchmark labels, while
+the phrase-boosting-vocabulary condition uses `all-hotwords` to consume
+`all_hotwords.json` verbatim. When invoking either Python module directly,
+select one policy with `--vocabulary-source`.
+
+The checkpoint's serialized OmegaConf decoding configuration may omit the
+optional `greedy.boosting_tree` node. The Nemotron runner creates that node when
+GPU-PB is selected; its absence does not by itself mean that NeMo must be
+reinstalled.
 
 ## 12. Long recordings
 
