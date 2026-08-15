@@ -102,6 +102,35 @@ def test_baseline_and_gpu_pb_use_same_greedy_decoder(
     assert tree.bpe_mode == "case_insensitive"
 
 
+def test_gpu_pb_adds_missing_optional_boosting_tree(
+    tmp_path: Path, monkeypatch
+) -> None:
+    install_fake_omegaconf(monkeypatch)
+    model = Model()
+    del model.cfg.decoding.greedy.boosting_tree
+    phrase_file = tmp_path / "phrases.txt"
+    phrase_file.write_text("洗肾\n", encoding="utf-8")
+
+    configure_greedy_decoding(
+        model,
+        phrase_file,
+        boosting_tree_alpha=1.0,
+        context_score=1.0,
+        depth_scaling=2.0,
+        bpe_mode="case_insensitive",
+    )
+
+    tree = model.cfg.decoding.greedy.boosting_tree
+    assert tree == {
+        "key_phrases_file": str(phrase_file),
+        "context_score": 1.0,
+        "depth_scaling": 2.0,
+        "bpe_mode": "case_insensitive",
+    }
+    assert model.cfg.decoding.greedy.boosting_tree_alpha == 1.0
+    assert model.changed
+
+
 def test_transcription_text_accepts_string_and_hypothesis() -> None:
     hypothesis = Node()
     hypothesis.text = "洗肾"
