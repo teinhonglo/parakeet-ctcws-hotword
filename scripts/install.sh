@@ -32,6 +32,7 @@ print("Python:", sys.version.split()[0])
 PY
 
 python -m pip install --upgrade pip setuptools wheel
+python -m pip install Cython packaging
 
 if ! python -c 'import torch, torchaudio' >/dev/null 2>&1; then
   if [[ -n "${TORCH_INDEX_URL:-}" ]]; then

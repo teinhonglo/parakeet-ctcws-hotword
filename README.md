@@ -1,7 +1,10 @@
-# Mandarin-English ASR + CTC Word Spotter
+# Parakeet CTC-WS + Nemotron GPU-PB Hotword Benchmark
 
 This project runs a Mandarin-English CTC ASR model and NVIDIA NeMo's CTC-based
 Word Spotter (CTC-WS) on the 71-file hospital hotword benchmark.
+
+It also provides a directly comparable Nemotron 3.5 pipeline with baseline
+RNNT decoding and NVIDIA NeMo GPU Phrase Boosting (GPU-PB).
 
 Default target model:
 
@@ -31,6 +34,19 @@ wav
 The context graph is built **once from the global 139-hotword vocabulary** and
 reused for every recording. It never receives the ground-truth hotwords for the
 current audio file.
+
+Nemotron uses the same global vocabulary policy and benchmark evaluator:
+
+```text
+wav -> Nemotron 3.5 zh-CN RNNT
+       |-> greedy_batch, alpha=0 -----------------> raw_asr
+       `-> greedy_batch + GPU-PB boosting tree ---> gpu_pb_asr
+```
+
+NVIDIA lists Mandarin support for this checkpoint as `zh-CN`, not `zh-TW`.
+Before GPU-PB, Chinese hotwords are converted from Traditional to Simplified
+with OpenCC `t2s`. Raw model output is retained for auditing, then converted
+with OpenCC `s2t` before it is written to the evaluator candidate directory.
 
 ## 1. System requirements
 
@@ -174,13 +190,29 @@ Stages:
 | 1 | download the trainable zh-CN Parakeet `.nemo` model from NGC |
 | 2 | run raw ASR + CTC-WS + merged ASR |
 | 3 | run the benchmark's own `evaluate.py` on raw and merged outputs |
+| 4 | run Nemotron baseline + GPU-PB with Traditional/Simplified conversion |
+| 5 | run the same `evaluate.py` on Nemotron baseline and GPU-PB outputs |
 
 Already completed per-audio inference is skipped. Add `--overwrite` when calling
 `python -m hotword_asr.benchmark` directly if you intentionally want to recompute it.
 
-`run.sh` sources `path.sh` after stage 0, so stages 1-3 always run inside the
+Run only the Nemotron comparison and evaluation with:
+
+```bash
+bash run.sh \
+  --stage 4 \
+  --stop-stage 5 \
+  --gpuid 0 \
+  --benchmark-dir /path/to/hotword_benchmark
+```
+
+The default remains `stop_stage=3`, so existing Parakeet runs do not
+automatically start the additional Nemotron experiment.
+
+`run.sh` sources `path.sh` after stage 0, so stages 1-5 always run inside the
 same Conda environment. When starting directly from `--stage 1`, `--stage 2`,
-or `--stage 3`, that environment must already have been created once by stage 0.
+`--stage 3`, `--stage 4`, or `--stage 5`, that environment must already have
+been created once by stage 0.
 
 ## 8. Run one audio file
 
@@ -236,6 +268,23 @@ The original benchmark evaluator therefore computes:
 Model loading is outside the RTF timer. This makes the number represent steady
 inference cost rather than download/initialization cost.
 
+Nemotron results are written to `exp/nemotron_gpu_pb/`:
+
+```text
+raw_asr/<id>/transcription.json
+gpu_pb_asr/<id>/transcription.json
+raw_zh_cn/baseline/<id>/transcription.json
+raw_zh_cn/gpu_pb/<id>/transcription.json
+details/baseline/<id>.json
+details/gpu_pb/<id>.json
+gpu_pb_hotwords.zh_cn.txt
+hotword_conversion_zh_tw_to_zh_cn.json
+run_config.json
+runtime_metrics.json
+report_raw_asr.xlsx
+report_gpu_pb_asr.xlsx
+```
+
 ## 10. CTC-WS parameters
 
 Defaults follow NVIDIA's NeMo CTC-WS tutorial:
@@ -274,7 +323,36 @@ Then pass `--aliases my_aliases.json`. The included
 `config/hotword_aliases.json` is intentionally empty so no benchmark label is
 silently corrected.
 
-## 11. Long recordings
+## 11. Nemotron GPU-PB parameters
+
+The Nemotron condition uses NeMo's token-level GPU Phrase Boosting during
+RNNT shallow-fusion decoding. Defaults follow NVIDIA's documented RNNT
+recommendations where a fixed recommendation is available:
+
+```text
+strategy                     = greedy_batch
+boosting_context_score       = 1.0
+boosting_depth_scaling       = 2.0
+boosting_bpe_mode            = case_insensitive
+boosting_tree_alpha          = 1.0  # starting point; tune on development data
+```
+
+For example:
+
+```bash
+bash run.sh \
+  --stage 4 \
+  --stop-stage 5 \
+  --nemotron-boosting-tree-alpha 0.5 \
+  --gpuid 0
+```
+
+Both Parakeet CTC-WS and Nemotron GPU-PB use the same
+`--vocabulary-source` setting from `run.sh`, which defaults to the current
+project policy `ground-truth-union`. Set it to `all-hotwords` to use the JSON
+list verbatim for both systems.
+
+## 12. Long recordings
 
 Some hospital recordings are several minutes long. Feeding a whole long file to
 a 0.6B FastConformer at once can cause unnecessary GPU-memory growth. The runner
@@ -288,10 +366,14 @@ the acoustic model:
 The same CTC-WS graph is reused for every chunk. Non-overlapping chunks keep the
 final transcript free of overlap duplicates. A keyword that lands exactly on a
 chunk boundary can theoretically be missed, so chunk length is configurable.
+The Nemotron runner uses the same chunking policy for a directly comparable
+memory profile.
 
 ## References
 
 - NVIDIA Mandarin-English Parakeet collection: <https://catalog.ngc.nvidia.com/orgs/nvidia/collections/parakeet-ctc-0.6b-zh-cn>
 - NVIDIA NeMo CTC-WS tutorial: <https://github.com/NVIDIA-NeMo/Speech/blob/main/tutorials/asr/ASR_Context_Biasing.ipynb>
+- NVIDIA Nemotron 3.5 ASR model card: <https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b>
+- NVIDIA NeMo GPU-PB documentation: <https://docs.nvidia.com/nemo/speech/nightly/asr/asr_customization/word_boosting.html>
 - NeMo Speech installation: <https://github.com/NVIDIA-NeMo/Speech>
 - NGC CLI documentation: <https://docs.ngc.nvidia.com/cli/cmd.html>

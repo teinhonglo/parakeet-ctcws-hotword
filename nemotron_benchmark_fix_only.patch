@@ -1,0 +1,181 @@
+diff --git a/hotword_asr/nemotron_benchmark.py b/hotword_asr/nemotron_benchmark.py
+index 1fa7de6..881595d 100644
+--- a/hotword_asr/nemotron_benchmark.py
++++ b/hotword_asr/nemotron_benchmark.py
+@@ -14,6 +14,7 @@ from .hotwords import (
+ )
+ from .io import write_json, write_transcription
+ from .metrics import RuntimeMeter
++from .text_normalization import to_simplified_chinese, to_taiwan_traditional
+ 
+ 
+ DEFAULT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+@@ -128,9 +129,8 @@ def load_model(model_name: str, device: str) -> Any:
+ def prepare_gpu_pb_hotwords(
+     vocabulary: list[str],
+     output_dir: Path,
+-    t2s_converter: Any,
+ ) -> tuple[Path, list[str], str]:
+-    simplified = [t2s_converter.convert(word) for word in vocabulary]
++    simplified = [to_simplified_chinese(word) for word in vocabulary]
+     if not all(word.strip() for word in simplified):
+         raise ValueError("Traditional-to-Simplified conversion produced an empty hotword")
+ 
+@@ -148,7 +148,7 @@ def prepare_gpu_pb_hotwords(
+     duplicate_count = len(simplified) - len(set(simplified))
+     if duplicate_count:
+         print(
+-            "WARNING: t2s conversion created "
++            "WARNING: tw2s conversion created "
+             f"{duplicate_count} duplicate phrase entries. The source list and "
+             "conversion map are preserved unchanged."
+         )
+@@ -211,16 +211,29 @@ def _transcribe_chunks(
+     batch_size: int,
+     target_lang: str,
+ ) -> list[Any]:
+-    kwargs = {
+-        "batch_size": batch_size,
+-        "target_lang": target_lang,
+-    }
+-    try:
+-        result = model.transcribe(chunk_paths, verbose=False, **kwargs)
+-    except TypeError as error:
+-        if "verbose" not in str(error):
+-            raise
+-        result = model.transcribe(chunk_paths, **kwargs)
++    if not hasattr(model, "get_transcribe_config"):
++        raise TypeError(
++            "Nemotron prompt model does not expose get_transcribe_config()"
++        )
++
++    transcribe_config = model.get_transcribe_config()
++    transcribe_config.batch_size = batch_size
++    transcribe_config.num_workers = 0
++    transcribe_config.verbose = False
++    transcribe_config.return_hypotheses = False
++    transcribe_config.target_lang = target_lang
++
++    # Current NeMo's prompt-aware Lhotse path creates path-only manifest rows.
++    # Their supervision language is therefore None, even when target_lang was
++    # supplied to transcribe(), and prompt lookup fails with
++    # "Unknown prompt key: 'None'". The non-Lhotse path yields a four-item
++    # batch, so Nemotron's _transcribe_forward() constructs prompt indices
++    # directly from transcribe_config.target_lang.
++    transcribe_config.use_lhotse = False
++    result = model.transcribe(
++        chunk_paths,
++        override_config=transcribe_config,
++    )
+ 
+     if isinstance(result, tuple):
+         result = result[0]
+@@ -234,7 +247,6 @@ def transcribe_file(
+     batch_size: int,
+     chunk_seconds: float,
+     target_lang: str,
+-    s2t_converter: Any,
+ ) -> dict[str, Any]:
+     import torch
+ 
+@@ -267,7 +279,7 @@ def transcribe_file(
+         for text in (_transcription_text(item) for item in hypotheses)
+         if text.strip()
+     )
+-    traditional = s2t_converter.convert(raw_zh_cn)
++    traditional = to_taiwan_traditional(raw_zh_cn)
+     elapsed = time.perf_counter() - started
+     return {
+         "audio_path": str(audio_path.resolve()),
+@@ -292,7 +304,6 @@ def run_condition(
+     batch_size: int,
+     chunk_seconds: float,
+     target_lang: str,
+-    s2t_converter: Any,
+     overwrite: bool,
+ ) -> dict[str, Any]:
+     candidate_root = output_dir / (
+@@ -332,13 +343,18 @@ def run_condition(
+                 batch_size=batch_size,
+                 chunk_seconds=chunk_seconds,
+                 target_lang=target_lang,
+-                s2t_converter=s2t_converter,
+             )
+             write_json(details_path, result)
+             inferred_audio_seconds += float(result["duration_sec"])
+             inferred_count += 1
+ 
+-        write_transcription(raw_root, audio_id, result["raw_zh_cn_text"])
++        # Keep the model's zh-CN output unchanged for auditing. The shared
++        # write_transcription() helper intentionally normalizes evaluator
++        # candidates to Taiwan Traditional, so raw output uses write_json().
++        write_json(
++            raw_root / audio_id / "transcription.json",
++            {"text": result["raw_zh_cn_text"]},
++        )
+         write_transcription(candidate_root, audio_id, result["text"])
+         per_audio[audio_id] = result["timing"]
+         dataset_audio_seconds += float(result["duration_sec"])
+@@ -370,8 +386,6 @@ def main() -> None:
+     if args.boosting_depth_scaling <= 0:
+         raise ValueError("--boosting-depth-scaling must be positive")
+ 
+-    from opencc import OpenCC
+-
+     benchmark_dir = args.benchmark_dir.resolve()
+     output_dir = args.output_dir.resolve()
+     hotword_map = load_hotword_map(benchmark_dir / "hotwords.json")
+@@ -382,10 +396,8 @@ def main() -> None:
+     )
+     write_json(output_dir / "benchmark_vocabulary_check.json", vocabulary_check)
+ 
+-    t2s_converter = OpenCC("t2s")
+-    s2t_converter = OpenCC("s2t")
+     phrase_file, simplified_vocabulary, phrase_sha256 = prepare_gpu_pb_hotwords(
+-        vocabulary, output_dir, t2s_converter
++        vocabulary, output_dir
+     )
+ 
+     audio_ids = sorted(hotword_map, key=int)
+@@ -423,7 +435,6 @@ def main() -> None:
+             batch_size=args.batch_size,
+             chunk_seconds=args.chunk_seconds,
+             target_lang=args.target_lang,
+-            s2t_converter=s2t_converter,
+             overwrite=args.overwrite,
+         )
+ 
+@@ -446,7 +457,6 @@ def main() -> None:
+             batch_size=args.batch_size,
+             chunk_seconds=args.chunk_seconds,
+             target_lang=args.target_lang,
+-            s2t_converter=s2t_converter,
+             overwrite=args.overwrite,
+         )
+ 
+@@ -457,8 +467,8 @@ def main() -> None:
+         "target_lang": args.target_lang,
+         "language_note": (
+             "The official model card lists Mandarin as zh-CN, not zh-TW. "
+-            "Hotwords are converted with OpenCC t2s before GPU-PB and model "
+-            "output is converted with OpenCC s2t before benchmark evaluation."
++            "Hotwords are converted with OpenCC tw2s before GPU-PB and model "
++            "output is converted with OpenCC s2tw before benchmark evaluation."
+         ),
+         "vocabulary_source": args.vocabulary_source,
+         "source_vocabulary_size": len(vocabulary),
+@@ -473,9 +483,13 @@ def main() -> None:
+             "depth_scaling": args.boosting_depth_scaling,
+             "bpe_mode": args.boosting_bpe_mode,
+         },
++        "transcription": {
++            "use_lhotse": False,
++            "reason": "preserve target_lang in Nemotron prompt conditioning",
++        },
+         "batch_size": args.batch_size,
+         "chunk_seconds": args.chunk_seconds,
+-        "candidate_schema": {"text": "OpenCC s2t transcription"},
++        "candidate_schema": {"text": "OpenCC s2tw transcription"},
+         "evaluator": str(benchmark_dir / "evaluate.py"),
+     }
+     write_json(output_dir / "run_config.json", run_config)

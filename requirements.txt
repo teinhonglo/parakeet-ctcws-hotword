@@ -1,4 +1,3 @@
-nemo_toolkit[asr]
 openpyxl>=3.1,<4
-soundfile>=0.12
-
+#NOTE: evaluate.py 用中文 ITN 將 ref/hyp 的數字表記正規化後再計算 MER。
+wetext==0.1.6

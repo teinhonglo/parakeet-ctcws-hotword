@@ -1,0 +1,867 @@
+diff --git a/README.md b/README.md
+index f92b3c0..f1c44f2 100644
+--- a/README.md
++++ b/README.md
+@@ -1,8 +1,11 @@
+-# Mandarin-English ASR + CTC Word Spotter
++# Parakeet CTC-WS + Nemotron GPU-PB Hotword Benchmark
+ 
+ This project runs a Mandarin-English CTC ASR model and NVIDIA NeMo's CTC-based
+ Word Spotter (CTC-WS) on the 71-file hospital hotword benchmark.
+ 
++It also provides a directly comparable Nemotron 3.5 pipeline with baseline
++RNNT decoding and NVIDIA NeMo GPU Phrase Boosting (GPU-PB).
++
+ Default target model:
+ 
+ - `nvidia/riva/parakeet-ctc-riva-0-6b-unified-zh-cn:trainable_v3.0`
+@@ -32,6 +35,19 @@ The context graph is built **once from the global 139-hotword vocabulary** and
+ reused for every recording. It never receives the ground-truth hotwords for the
+ current audio file.
+ 
++Nemotron uses the same global vocabulary policy and benchmark evaluator:
++
++```text
++wav -> Nemotron 3.5 zh-CN RNNT
++       |-> greedy_batch, alpha=0 -----------------> raw_asr
++       `-> greedy_batch + GPU-PB boosting tree ---> gpu_pb_asr
++```
++
++NVIDIA lists Mandarin support for this checkpoint as `zh-CN`, not `zh-TW`.
++Before GPU-PB, Chinese hotwords are converted from Traditional to Simplified
++with OpenCC `t2s`. Raw model output is retained for auditing, then converted
++with OpenCC `s2t` before it is written to the evaluator candidate directory.
++
+ ## 1. System requirements
+ 
+ - Ubuntu/Linux
+@@ -174,13 +190,29 @@ Stages:
+ | 1 | download the trainable zh-CN Parakeet `.nemo` model from NGC |
+ | 2 | run raw ASR + CTC-WS + merged ASR |
+ | 3 | run the benchmark's own `evaluate.py` on raw and merged outputs |
++| 4 | run Nemotron baseline + GPU-PB with Traditional/Simplified conversion |
++| 5 | run the same `evaluate.py` on Nemotron baseline and GPU-PB outputs |
+ 
+ Already completed per-audio inference is skipped. Add `--overwrite` when calling
+ `python -m hotword_asr.benchmark` directly if you intentionally want to recompute it.
+ 
+-`run.sh` sources `path.sh` after stage 0, so stages 1-3 always run inside the
++Run only the Nemotron comparison and evaluation with:
++
++```bash
++bash run.sh \
++  --stage 4 \
++  --stop-stage 5 \
++  --gpuid 0 \
++  --benchmark-dir /path/to/hotword_benchmark
++```
++
++The default remains `stop_stage=3`, so existing Parakeet runs do not
++automatically start the additional Nemotron experiment.
++
++`run.sh` sources `path.sh` after stage 0, so stages 1-5 always run inside the
+ same Conda environment. When starting directly from `--stage 1`, `--stage 2`,
+-or `--stage 3`, that environment must already have been created once by stage 0.
++`--stage 3`, `--stage 4`, or `--stage 5`, that environment must already have
++been created once by stage 0.
+ 
+ ## 8. Run one audio file
+ 
+@@ -236,6 +268,23 @@ The original benchmark evaluator therefore computes:
+ Model loading is outside the RTF timer. This makes the number represent steady
+ inference cost rather than download/initialization cost.
+ 
++Nemotron results are written to `exp/nemotron_gpu_pb/`:
++
++```text
++raw_asr/<id>/transcription.json
++gpu_pb_asr/<id>/transcription.json
++raw_zh_cn/baseline/<id>/transcription.json
++raw_zh_cn/gpu_pb/<id>/transcription.json
++details/baseline/<id>.json
++details/gpu_pb/<id>.json
++gpu_pb_hotwords.zh_cn.txt
++hotword_conversion_zh_tw_to_zh_cn.json
++run_config.json
++runtime_metrics.json
++report_raw_asr.xlsx
++report_gpu_pb_asr.xlsx
++```
++
+ ## 10. CTC-WS parameters
+ 
+ Defaults follow NVIDIA's NeMo CTC-WS tutorial:
+@@ -274,7 +323,36 @@ Then pass `--aliases my_aliases.json`. The included
+ `config/hotword_aliases.json` is intentionally empty so no benchmark label is
+ silently corrected.
+ 
+-## 11. Long recordings
++## 11. Nemotron GPU-PB parameters
++
++The Nemotron condition uses NeMo's token-level GPU Phrase Boosting during
++RNNT shallow-fusion decoding. Defaults follow NVIDIA's documented RNNT
++recommendations where a fixed recommendation is available:
++
++```text
++strategy                     = greedy_batch
++boosting_context_score       = 1.0
++boosting_depth_scaling       = 2.0
++boosting_bpe_mode            = case_insensitive
++boosting_tree_alpha          = 1.0  # starting point; tune on development data
++```
++
++For example:
++
++```bash
++bash run.sh \
++  --stage 4 \
++  --stop-stage 5 \
++  --nemotron-boosting-tree-alpha 0.5 \
++  --gpuid 0
++```
++
++Both Parakeet CTC-WS and Nemotron GPU-PB use the same
++`--vocabulary-source` setting from `run.sh`, which defaults to the current
++project policy `ground-truth-union`. Set it to `all-hotwords` to use the JSON
++list verbatim for both systems.
++
++## 12. Long recordings
+ 
+ Some hospital recordings are several minutes long. Feeding a whole long file to
+ a 0.6B FastConformer at once can cause unnecessary GPU-memory growth. The runner
+@@ -288,10 +366,14 @@ the acoustic model:
+ The same CTC-WS graph is reused for every chunk. Non-overlapping chunks keep the
+ final transcript free of overlap duplicates. A keyword that lands exactly on a
+ chunk boundary can theoretically be missed, so chunk length is configurable.
++The Nemotron runner uses the same chunking policy for a directly comparable
++memory profile.
+ 
+ ## References
+ 
+ - NVIDIA Mandarin-English Parakeet collection: <https://catalog.ngc.nvidia.com/orgs/nvidia/collections/parakeet-ctc-0.6b-zh-cn>
+ - NVIDIA NeMo CTC-WS tutorial: <https://github.com/NVIDIA-NeMo/Speech/blob/main/tutorials/asr/ASR_Context_Biasing.ipynb>
++- NVIDIA Nemotron 3.5 ASR model card: <https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b>
++- NVIDIA NeMo GPU-PB documentation: <https://docs.nvidia.com/nemo/speech/nightly/asr/asr_customization/word_boosting.html>
+ - NeMo Speech installation: <https://github.com/NVIDIA-NeMo/Speech>
+ - NGC CLI documentation: <https://docs.ngc.nvidia.com/cli/cmd.html>
+diff --git a/hotword_asr/nemotron_benchmark.py b/hotword_asr/nemotron_benchmark.py
+new file mode 100644
+index 0000000..1fa7de6
+--- /dev/null
++++ b/hotword_asr/nemotron_benchmark.py
+@@ -0,0 +1,487 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++import tempfile
++import time
++from pathlib import Path
++from typing import Any
++
++from .hotwords import (
++    compare_vocabularies,
++    load_hotword_list,
++    load_hotword_map,
++)
++from .io import write_json, write_transcription
++from .metrics import RuntimeMeter
++
++
++DEFAULT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
++MODEL_CARD = "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b"
++GPU_PB_DOCUMENTATION = (
++    "https://docs.nvidia.com/nemo/speech/nightly/asr/"
++    "asr_customization/word_boosting.html"
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Run Nemotron 3.5 baseline and NeMo GPU Phrase Boosting on the "
++            "hospital hotword benchmark"
++        )
++    )
++    parser.add_argument("--benchmark-dir", type=Path, required=True)
++    parser.add_argument("--model", default=DEFAULT_MODEL)
++    parser.add_argument(
++        "--output-dir", type=Path, default=Path("exp/nemotron_gpu_pb")
++    )
++    parser.add_argument("--device", default="cuda")
++    parser.add_argument("--batch-size", type=int, default=8)
++    parser.add_argument("--chunk-seconds", type=float, default=30.0)
++    parser.add_argument(
++        "--target-lang",
++        choices=("zh-CN",),
++        default="zh-CN",
++        help=(
++            "Official Nemotron Mandarin locale. zh-TW is not listed as a "
++            "supported transcription locale."
++        ),
++    )
++    parser.add_argument(
++        "--vocabulary-source",
++        choices=("ground-truth-union", "all-hotwords"),
++        default="ground-truth-union",
++        help=(
++            "Use the same global vocabulary selection rule as the Parakeet "
++            "CTC-WS benchmark."
++        ),
++    )
++    parser.add_argument(
++        "--boosting-tree-alpha",
++        type=float,
++        default=1.0,
++        help="GPU-PB shallow-fusion weight. NVIDIA recommends tuning it on the data.",
++    )
++    parser.add_argument(
++        "--boosting-context-score",
++        type=float,
++        default=1.0,
++        help="GPU-PB context graph arc score (NVIDIA recommendation: 1.0)",
++    )
++    parser.add_argument(
++        "--boosting-depth-scaling",
++        type=float,
++        default=2.0,
++        help="GPU-PB depth scaling for RNNT (NVIDIA recommendation: 2.0)",
++    )
++    parser.add_argument(
++        "--boosting-bpe-mode",
++        choices=("default", "case_insensitive", "bpe_dropout", "var_bpe"),
++        default="case_insensitive",
++    )
++    parser.add_argument(
++        "--condition",
++        choices=("both", "baseline", "gpu-pb"),
++        default="both",
++    )
++    parser.add_argument(
++        "--limit", type=int, default=None, help="Run only the first N files"
++    )
++    parser.add_argument("--overwrite", action="store_true")
++    return parser.parse_args()
++
++
++def select_vocabulary(
++    hotword_map: dict[str, list[str]],
++    all_hotwords: list[str],
++    source: str,
++) -> list[str]:
++    if source == "ground-truth-union":
++        return sorted(
++            {word for words in hotword_map.values() for word in words},
++            key=str.casefold,
++        )
++    if source == "all-hotwords":
++        return list(all_hotwords)
++    raise ValueError(f"Unsupported vocabulary source: {source}")
++
++
++def load_model(model_name: str, device: str) -> Any:
++    import torch
++    from nemo.collections.asr.models import ASRModel
++
++    if device.startswith("cuda") and not torch.cuda.is_available():
++        raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False")
++
++    model = ASRModel.from_pretrained(model_name=model_name)
++    model = model.to(device)
++    model.eval()
++    model.freeze()
++    if not hasattr(model, "cfg") or not hasattr(model.cfg, "decoding"):
++        raise TypeError("Nemotron model does not expose an RNNT decoding config")
++    if not hasattr(model, "change_decoding_strategy"):
++        raise TypeError("Nemotron model cannot change its decoding strategy")
++    return model
++
++
++def prepare_gpu_pb_hotwords(
++    vocabulary: list[str],
++    output_dir: Path,
++    t2s_converter: Any,
++) -> tuple[Path, list[str], str]:
++    simplified = [t2s_converter.convert(word) for word in vocabulary]
++    if not all(word.strip() for word in simplified):
++        raise ValueError("Traditional-to-Simplified conversion produced an empty hotword")
++
++    conversion_map = [
++        {"benchmark_term": source, "gpu_pb_zh_cn": converted}
++        for source, converted in zip(vocabulary, simplified)
++    ]
++    write_json(output_dir / "hotword_conversion_zh_tw_to_zh_cn.json", conversion_map)
++
++    phrase_text = "\n".join(simplified) + "\n"
++    phrase_file = output_dir / "gpu_pb_hotwords.zh_cn.txt"
++    phrase_file.parent.mkdir(parents=True, exist_ok=True)
++    phrase_file.write_text(phrase_text, encoding="utf-8")
++
++    duplicate_count = len(simplified) - len(set(simplified))
++    if duplicate_count:
++        print(
++            "WARNING: t2s conversion created "
++            f"{duplicate_count} duplicate phrase entries. The source list and "
++            "conversion map are preserved unchanged."
++        )
++
++    return (
++        phrase_file,
++        simplified,
++        hashlib.sha256(phrase_text.encode("utf-8")).hexdigest(),
++    )
++
++
++def configure_greedy_decoding(
++    model: Any,
++    phrase_file: Path | None,
++    *,
++    boosting_tree_alpha: float,
++    context_score: float,
++    depth_scaling: float,
++    bpe_mode: str,
++) -> None:
++    from omegaconf import open_dict
++
++    decoding = model.cfg.decoding
++    try:
++        with open_dict(decoding):
++            decoding.strategy = "greedy_batch"
++            # NeMo places alpha on greedy, while phrase construction options are
++            # nested under greedy.boosting_tree.
++            decoding.greedy.boosting_tree_alpha = 0.0
++            if phrase_file is not None:
++                decoding.greedy.boosting_tree.key_phrases_file = str(phrase_file)
++                decoding.greedy.boosting_tree.context_score = context_score
++                decoding.greedy.boosting_tree.depth_scaling = depth_scaling
++                decoding.greedy.boosting_tree.bpe_mode = bpe_mode
++                decoding.greedy.boosting_tree_alpha = boosting_tree_alpha
++        model.change_decoding_strategy(decoding)
++    except (AttributeError, KeyError, TypeError) as error:
++        raise RuntimeError(
++            "The installed NeMo build does not expose the documented RNNT GPU-PB "
++            "configuration. Re-run scripts/install.sh to install the required "
++            "NeMo main-branch version."
++        ) from error
++
++
++def _transcription_text(item: Any) -> str:
++    if isinstance(item, str):
++        return item
++    text = getattr(item, "text", None)
++    if isinstance(text, str):
++        return text
++    raise TypeError(
++        "Unexpected NeMo transcription type. Expected str or an object with a "
++        f"string .text attribute, got {type(item).__name__}."
++    )
++
++
++def _transcribe_chunks(
++    model: Any,
++    chunk_paths: list[str],
++    batch_size: int,
++    target_lang: str,
++) -> list[Any]:
++    kwargs = {
++        "batch_size": batch_size,
++        "target_lang": target_lang,
++    }
++    try:
++        result = model.transcribe(chunk_paths, verbose=False, **kwargs)
++    except TypeError as error:
++        if "verbose" not in str(error):
++            raise
++        result = model.transcribe(chunk_paths, **kwargs)
++
++    if isinstance(result, tuple):
++        result = result[0]
++    return list(result)
++
++
++def transcribe_file(
++    model: Any,
++    audio_path: Path,
++    *,
++    batch_size: int,
++    chunk_seconds: float,
++    target_lang: str,
++    s2t_converter: Any,
++) -> dict[str, Any]:
++    import torch
++
++    from .engine import _load_audio, _write_chunks
++
++    audio, sample_rate = _load_audio(audio_path)
++    duration = len(audio) / sample_rate
++    started = time.perf_counter()
++
++    with tempfile.TemporaryDirectory(prefix="nemotron_chunks_") as tmp:
++        chunk_meta = _write_chunks(
++            audio, sample_rate, chunk_seconds, Path(tmp)
++        )
++        chunk_paths = [str(path) for path, _, _ in chunk_meta]
++        with torch.inference_mode():
++            hypotheses = _transcribe_chunks(
++                model, chunk_paths, batch_size, target_lang
++            )
++        if next(model.parameters()).device.type == "cuda":
++            torch.cuda.synchronize()
++
++    if len(hypotheses) != len(chunk_meta):
++        raise RuntimeError(
++            f"NeMo returned {len(hypotheses)} hypotheses for "
++            f"{len(chunk_meta)} chunks"
++        )
++
++    raw_zh_cn = " ".join(
++        text.strip()
++        for text in (_transcription_text(item) for item in hypotheses)
++        if text.strip()
++    )
++    traditional = s2t_converter.convert(raw_zh_cn)
++    elapsed = time.perf_counter() - started
++    return {
++        "audio_path": str(audio_path.resolve()),
++        "duration_sec": round(duration, 4),
++        "raw_zh_cn_text": raw_zh_cn,
++        "text": traditional,
++        "timing": {
++            "inference_seconds": round(elapsed, 4),
++            "rtf": round(elapsed / duration, 6) if duration else None,
++        },
++    }
++
++
++def run_condition(
++    *,
++    condition_name: str,
++    model: Any,
++    audio_ids: list[str],
++    benchmark_dir: Path,
++    output_dir: Path,
++    device: str,
++    batch_size: int,
++    chunk_seconds: float,
++    target_lang: str,
++    s2t_converter: Any,
++    overwrite: bool,
++) -> dict[str, Any]:
++    candidate_root = output_dir / (
++        "raw_asr" if condition_name == "baseline" else "gpu_pb_asr"
++    )
++    raw_root = output_dir / "raw_zh_cn" / condition_name
++    details_root = output_dir / "details" / condition_name
++    per_audio: dict[str, dict[str, Any]] = {}
++    inferred_audio_seconds = 0.0
++    dataset_audio_seconds = 0.0
++    inferred_count = 0
++
++    meter = RuntimeMeter(device)
++    meter.start()
++    for index, audio_id in enumerate(audio_ids, start=1):
++        audio_path = benchmark_dir / "audio" / f"{audio_id}.wav"
++        if not audio_path.exists():
++            raise FileNotFoundError(audio_path)
++        details_path = details_root / f"{audio_id}.json"
++
++        if details_path.exists() and not overwrite:
++            from .hotwords import load_json
++
++            result = load_json(details_path)
++            print(
++                f"[{condition_name} {index:02d}/{len(audio_ids)}] "
++                f"{audio_id}: skip existing"
++            )
++        else:
++            print(
++                f"[{condition_name} {index:02d}/{len(audio_ids)}] "
++                f"{audio_id}: {audio_path.name}"
++            )
++            result = transcribe_file(
++                model,
++                audio_path,
++                batch_size=batch_size,
++                chunk_seconds=chunk_seconds,
++                target_lang=target_lang,
++                s2t_converter=s2t_converter,
++            )
++            write_json(details_path, result)
++            inferred_audio_seconds += float(result["duration_sec"])
++            inferred_count += 1
++
++        write_transcription(raw_root, audio_id, result["raw_zh_cn_text"])
++        write_transcription(candidate_root, audio_id, result["text"])
++        per_audio[audio_id] = result["timing"]
++        dataset_audio_seconds += float(result["duration_sec"])
++
++    runtime = meter.stop(inferred_audio_seconds)
++    runtime.update(
++        {
++            "condition": condition_name,
++            "dataset_audio_seconds": round(dataset_audio_seconds, 4),
++            "audio_count": len(audio_ids),
++            "inferred_audio_count_latest_run": inferred_count,
++            "reused_audio_count_latest_run": len(audio_ids) - inferred_count,
++            "per_audio": per_audio,
++        }
++    )
++    return runtime
++
++
++def main() -> None:
++    args = parse_args()
++    if args.batch_size <= 0:
++        raise ValueError("--batch-size must be positive")
++    if args.chunk_seconds <= 0:
++        raise ValueError("--chunk-seconds must be positive")
++    if args.boosting_tree_alpha < 0:
++        raise ValueError("--boosting-tree-alpha cannot be negative")
++    if args.boosting_context_score <= 0:
++        raise ValueError("--boosting-context-score must be positive")
++    if args.boosting_depth_scaling <= 0:
++        raise ValueError("--boosting-depth-scaling must be positive")
++
++    from opencc import OpenCC
++
++    benchmark_dir = args.benchmark_dir.resolve()
++    output_dir = args.output_dir.resolve()
++    hotword_map = load_hotword_map(benchmark_dir / "hotwords.json")
++    all_hotwords = load_hotword_list(benchmark_dir / "all_hotwords.json")
++    vocabulary_check = compare_vocabularies(hotword_map, all_hotwords)
++    vocabulary = select_vocabulary(
++        hotword_map, all_hotwords, args.vocabulary_source
++    )
++    write_json(output_dir / "benchmark_vocabulary_check.json", vocabulary_check)
++
++    t2s_converter = OpenCC("t2s")
++    s2t_converter = OpenCC("s2t")
++    phrase_file, simplified_vocabulary, phrase_sha256 = prepare_gpu_pb_hotwords(
++        vocabulary, output_dir, t2s_converter
++    )
++
++    audio_ids = sorted(hotword_map, key=int)
++    if args.limit is not None:
++        audio_ids = audio_ids[: args.limit]
++
++    print(f"Loading model: {args.model}")
++    model = load_model(args.model, args.device)
++    runtime_metrics_path = output_dir / "runtime_metrics.json"
++    runtime_metrics: dict[str, Any] = {}
++    if runtime_metrics_path.exists():
++        from .hotwords import load_json
++
++        existing_metrics = load_json(runtime_metrics_path)
++        if not isinstance(existing_metrics, dict):
++            raise ValueError(f"Invalid runtime metrics: {runtime_metrics_path}")
++        runtime_metrics.update(existing_metrics)
++
++    if args.condition in {"both", "baseline"}:
++        configure_greedy_decoding(
++            model,
++            None,
++            boosting_tree_alpha=args.boosting_tree_alpha,
++            context_score=args.boosting_context_score,
++            depth_scaling=args.boosting_depth_scaling,
++            bpe_mode=args.boosting_bpe_mode,
++        )
++        runtime_metrics["baseline"] = run_condition(
++            condition_name="baseline",
++            model=model,
++            audio_ids=audio_ids,
++            benchmark_dir=benchmark_dir,
++            output_dir=output_dir,
++            device=args.device,
++            batch_size=args.batch_size,
++            chunk_seconds=args.chunk_seconds,
++            target_lang=args.target_lang,
++            s2t_converter=s2t_converter,
++            overwrite=args.overwrite,
++        )
++
++    if args.condition in {"both", "gpu-pb"}:
++        configure_greedy_decoding(
++            model,
++            phrase_file,
++            boosting_tree_alpha=args.boosting_tree_alpha,
++            context_score=args.boosting_context_score,
++            depth_scaling=args.boosting_depth_scaling,
++            bpe_mode=args.boosting_bpe_mode,
++        )
++        runtime_metrics["gpu_pb"] = run_condition(
++            condition_name="gpu_pb",
++            model=model,
++            audio_ids=audio_ids,
++            benchmark_dir=benchmark_dir,
++            output_dir=output_dir,
++            device=args.device,
++            batch_size=args.batch_size,
++            chunk_seconds=args.chunk_seconds,
++            target_lang=args.target_lang,
++            s2t_converter=s2t_converter,
++            overwrite=args.overwrite,
++        )
++
++    run_config = {
++        "model": args.model,
++        "model_card": MODEL_CARD,
++        "device": args.device,
++        "target_lang": args.target_lang,
++        "language_note": (
++            "The official model card lists Mandarin as zh-CN, not zh-TW. "
++            "Hotwords are converted with OpenCC t2s before GPU-PB and model "
++            "output is converted with OpenCC s2t before benchmark evaluation."
++        ),
++        "vocabulary_source": args.vocabulary_source,
++        "source_vocabulary_size": len(vocabulary),
++        "gpu_pb_vocabulary_size": len(simplified_vocabulary),
++        "gpu_pb_phrase_file": str(phrase_file),
++        "gpu_pb_phrase_sha256": phrase_sha256,
++        "gpu_pb_documentation": GPU_PB_DOCUMENTATION,
++        "decoding": {
++            "strategy": "greedy_batch",
++            "boosting_tree_alpha": args.boosting_tree_alpha,
++            "context_score": args.boosting_context_score,
++            "depth_scaling": args.boosting_depth_scaling,
++            "bpe_mode": args.boosting_bpe_mode,
++        },
++        "batch_size": args.batch_size,
++        "chunk_seconds": args.chunk_seconds,
++        "candidate_schema": {"text": "OpenCC s2t transcription"},
++        "evaluator": str(benchmark_dir / "evaluate.py"),
++    }
++    write_json(output_dir / "run_config.json", run_config)
++    write_json(runtime_metrics_path, runtime_metrics)
++    print(f"Done. Outputs: {output_dir}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/requirements.txt b/requirements.txt
+index 2b7d734..d159851 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,4 +1,4 @@
+-nemo_toolkit[asr]
++nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main
+ openpyxl>=3.1,<4
++opencc-python-reimplemented>=0.1.7
+ soundfile>=0.12
+-
+diff --git a/run.sh b/run.sh
+index b670d5b..a32e778 100755
+--- a/run.sh
++++ b/run.sh
+@@ -9,6 +9,15 @@ gpuid=0
+ benchmark_dir="${project_root}/hotword_benchmark"
+ model="${project_root}/models"
+ exp_dir="${project_root}/exp/parakeet_ctcws"
++nemotron_model="nvidia/nemotron-3.5-asr-streaming-0.6b"
++nemotron_exp_dir="${project_root}/exp/nemotron_gpu_pb"
++nemotron_target_lang="zh-CN"
++vocabulary_source="ground-truth-union"
++nemotron_boosting_tree_alpha=1.0
++nemotron_boosting_context_score=1.0
++nemotron_boosting_depth_scaling=2.0
++nemotron_boosting_bpe_mode="case_insensitive"
++overwrite=false
+ limit=""
+ 
+ . ./local/parse_options.sh
+@@ -28,13 +37,45 @@ if (( stage <= 2 && stop_stage >= 2 )); then
+     --model "${model}"
+     --output-dir "${exp_dir}"
+     --device cuda
++    --vocabulary-source "${vocabulary_source}"
+   )
+   if [[ -n "${limit}" ]]; then
+     infer_args+=(--limit "${limit}")
+   fi
++  if ${overwrite}; then
++    infer_args+=(--overwrite)
++  fi
+   CUDA_VISIBLE_DEVICES="${gpuid}" python -m hotword_asr.benchmark "${infer_args[@]}"
+ fi
+ 
+ if (( stage <= 3 && stop_stage >= 3 )); then
+   bash "${project_root}/scripts/evaluate_benchmark.sh" "${benchmark_dir}" "${exp_dir}"
+ fi
++
++if (( stage <= 4 && stop_stage >= 4 )); then
++  nemotron_args=(
++    --benchmark-dir "${benchmark_dir}"
++    --model "${nemotron_model}"
++    --output-dir "${nemotron_exp_dir}"
++    --device cuda
++    --target-lang "${nemotron_target_lang}"
++    --vocabulary-source "${vocabulary_source}"
++    --boosting-tree-alpha "${nemotron_boosting_tree_alpha}"
++    --boosting-context-score "${nemotron_boosting_context_score}"
++    --boosting-depth-scaling "${nemotron_boosting_depth_scaling}"
++    --boosting-bpe-mode "${nemotron_boosting_bpe_mode}"
++  )
++  if [[ -n "${limit}" ]]; then
++    nemotron_args+=(--limit "${limit}")
++  fi
++  if ${overwrite}; then
++    nemotron_args+=(--overwrite)
++  fi
++  CUDA_VISIBLE_DEVICES="${gpuid}" \
++    python -m hotword_asr.nemotron_benchmark "${nemotron_args[@]}"
++fi
++
++if (( stage <= 5 && stop_stage >= 5 )); then
++  bash "${project_root}/scripts/evaluate_nemotron_benchmark.sh" \
++    "${benchmark_dir}" "${nemotron_exp_dir}"
++fi
+diff --git a/scripts/evaluate_nemotron_benchmark.sh b/scripts/evaluate_nemotron_benchmark.sh
+new file mode 100644
+index 0000000..9c8a30c
+--- /dev/null
++++ b/scripts/evaluate_nemotron_benchmark.sh
+@@ -0,0 +1,18 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++if [[ "$#" -ne 2 ]]; then
++  echo "Usage: $0 <benchmark_dir> <nemotron_exp_dir>" >&2
++  exit 2
++fi
++
++benchmark_dir="$(cd "$1" && pwd)"
++exp_dir="$(cd "$2" && pwd)"
++
++python "${benchmark_dir}/evaluate.py" \
++  --candidate "${exp_dir}/raw_asr" \
++  --output "${exp_dir}/report_raw_asr.xlsx"
++
++python "${benchmark_dir}/evaluate.py" \
++  --candidate "${exp_dir}/gpu_pb_asr" \
++  --output "${exp_dir}/report_gpu_pb_asr.xlsx"
+diff --git a/scripts/install.sh b/scripts/install.sh
+index 526a8ca..296d988 100644
+--- a/scripts/install.sh
++++ b/scripts/install.sh
+@@ -32,6 +32,7 @@ print("Python:", sys.version.split()[0])
+ PY
+ 
+ python -m pip install --upgrade pip setuptools wheel
++python -m pip install Cython packaging
+ 
+ if ! python -c 'import torch, torchaudio' >/dev/null 2>&1; then
+   if [[ -n "${TORCH_INDEX_URL:-}" ]]; then
+diff --git a/tests/test_nemotron.py b/tests/test_nemotron.py
+new file mode 100644
+index 0000000..011248a
+--- /dev/null
++++ b/tests/test_nemotron.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import contextlib
++import sys
++import types
++from pathlib import Path
++
++from hotword_asr.nemotron_benchmark import (
++    _transcription_text,
++    configure_greedy_decoding,
++    prepare_gpu_pb_hotwords,
++    select_vocabulary,
++)
++
++
++class Converter:
++    def convert(self, text: str) -> str:
++        return text.replace("洗腎", "洗肾").replace("苑裡", "苑里")
++
++
++class Node:
++    pass
++
++
++class Model:
++    def __init__(self) -> None:
++        self.cfg = Node()
++        self.cfg.decoding = Node()
++        self.cfg.decoding.strategy = "original"
++        self.cfg.decoding.greedy = Node()
++        self.cfg.decoding.greedy.boosting_tree_alpha = None
++        self.cfg.decoding.greedy.boosting_tree = Node()
++        tree = self.cfg.decoding.greedy.boosting_tree
++        tree.key_phrases_file = None
++        tree.context_score = None
++        tree.depth_scaling = None
++        tree.bpe_mode = None
++        self.changed = False
++
++    def change_decoding_strategy(self, decoding) -> None:
++        assert decoding is self.cfg.decoding
++        self.changed = True
++
++
++def install_fake_omegaconf(monkeypatch) -> None:
++    module = types.ModuleType("omegaconf")
++    module.open_dict = lambda _: contextlib.nullcontext()
++    monkeypatch.setitem(sys.modules, "omegaconf", module)
++
++
++def test_select_vocabulary_matches_existing_benchmark_policy() -> None:
++    hotword_map = {"1": ["洗腎", "elbew"], "2": ["洗腎", "X-RAY"]}
++    all_hotwords = ["洗腎", "elbow", "X-RAY"]
++    assert select_vocabulary(
++        hotword_map, all_hotwords, "ground-truth-union"
++    ) == ["elbew", "X-RAY", "洗腎"]
++    assert select_vocabulary(
++        hotword_map, all_hotwords, "all-hotwords"
++    ) == all_hotwords
++
++
++def test_prepare_gpu_pb_hotwords_preserves_source_entries(tmp_path: Path) -> None:
++    phrase_file, simplified, _ = prepare_gpu_pb_hotwords(
++        ["洗腎", "苑裡", "X-RAY"], tmp_path, Converter()
++    )
++    assert simplified == ["洗肾", "苑里", "X-RAY"]
++    assert phrase_file.read_text(encoding="utf-8").splitlines() == simplified
++
++
++def test_baseline_and_gpu_pb_use_same_greedy_decoder(
++    tmp_path: Path, monkeypatch
++) -> None:
++    install_fake_omegaconf(monkeypatch)
++    model = Model()
++    configure_greedy_decoding(
++        model,
++        None,
++        boosting_tree_alpha=0.75,
++        context_score=1.0,
++        depth_scaling=2.0,
++        bpe_mode="case_insensitive",
++    )
++    assert model.changed
++    assert model.cfg.decoding.strategy == "greedy_batch"
++    assert model.cfg.decoding.greedy.boosting_tree_alpha == 0.0
++
++    phrase_file = tmp_path / "phrases.txt"
++    phrase_file.write_text("洗肾\n", encoding="utf-8")
++    configure_greedy_decoding(
++        model,
++        phrase_file,
++        boosting_tree_alpha=0.75,
++        context_score=1.0,
++        depth_scaling=2.0,
++        bpe_mode="case_insensitive",
++    )
++    tree = model.cfg.decoding.greedy.boosting_tree
++    assert model.cfg.decoding.greedy.boosting_tree_alpha == 0.75
++    assert tree.key_phrases_file == str(phrase_file)
++    assert tree.context_score == 1.0
++    assert tree.depth_scaling == 2.0
++    assert tree.bpe_mode == "case_insensitive"
++
++
++def test_transcription_text_accepts_string_and_hypothesis() -> None:
++    hypothesis = Node()
++    hypothesis.text = "洗肾"
++    assert _transcription_text("苑里") == "苑里"
++    assert _transcription_text(hypothesis) == "洗肾"
