@@ -69,16 +69,31 @@ fi
 
 python -m pip install -r "${project_root}/requirements-funasr.txt"
 python -m pip install -e "${project_root}"
+python -m pip check
 
 python - <<'PY'
 import sys
+from importlib.metadata import version
+import librosa
+import openpyxl
+import soundfile
 import torch
 import torchaudio
+import transformers
+from opencc import OpenCC
 from funasr import AutoModel
+version("wetext")
+
 print("Python:", sys.executable)
 print("torch:", torch.__version__)
 print("torchaudio:", torchaudio.__version__)
 print("CUDA available:", torch.cuda.is_available())
+
+print("FunASR inference dependencies: OK")
+print("Benchmark evaluation dependencies: OK")
 print("FunASR AutoModel import: OK")
 PY
+python -m hotword_asr.funasr_benchmark --help >/dev/null
+echo "Local FunASR benchmark entry point: OK"
+
 echo "Conda environment ready: ${conda_env_name}"

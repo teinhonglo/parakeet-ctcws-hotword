@@ -8,3 +8,8 @@ huggingface_hub
 opencc-python-reimplemented
 torch
 torchaudio
+transformers
+sentencepiece
+safetensors
+soundfile
+librosa
