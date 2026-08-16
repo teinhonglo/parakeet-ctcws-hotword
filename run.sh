@@ -4,7 +4,9 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 stage=1
-stop_stage=3000
+#NOTE: Keep the established Parakeet-only default. Nemotron remains an explicit
+# stage 4-5 experiment so an ordinary run does not unexpectedly load two models.
+stop_stage=10000
 gpuid=0
 benchmark_dir="${project_root}/hotword_benchmark"
 model="${project_root}/models"

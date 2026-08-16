@@ -95,9 +95,7 @@ def run_benchmark(args: argparse.Namespace) -> None:
             "oracle_hotwords": {"hotword_source": "hotwords.json[audio_id]", "scope": "per_audio_ground_truth"}},
         "ctcws": vars(config), "selected_audio_ids": audio_ids})
 
-
 def main() -> None:
     run_benchmark(parse_args())
-
 
 if __name__ == "__main__": main()
