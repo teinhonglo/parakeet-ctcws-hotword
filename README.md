@@ -147,6 +147,8 @@ The FunASR VAD pipeline limits each inference batch to 30 accumulated audio
 seconds by default (`--batch-size-s 30`) and clears released CUDA cache between
 files. This avoids batching every VAD segment of a long recording into one LLM
 generation call, while preserving the exact same setting for all conditions.
+Every `model.generate()` call is wrapped in `torch.inference_mode()`, which
+includes `torch.no_grad()` semantics and avoids autograd bookkeeping.
 
 For debugging, all three runners accept `--condition all`, `vanilla`,
 `all-hotwords`, or `oracle-hotwords`:

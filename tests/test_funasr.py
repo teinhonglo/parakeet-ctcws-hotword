@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
+import sys
+import types
 import wave
 from pathlib import Path
 from unittest.mock import Mock
@@ -49,6 +52,15 @@ def test_all_conditions_pass_exact_hotwords_and_load_model_once(
         "hotword_asr.io.to_taiwan_traditional",
         lambda text: text.replace("肾", "腎"),
     )
+    inference_entries = []
+    torch = types.ModuleType("torch")
+    @contextlib.contextmanager
+    def inference_mode():
+        inference_entries.append(True)
+        yield
+    torch.inference_mode = inference_mode
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+    monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setattr(
         "hotword_asr.funasr_benchmark.to_taiwan_traditional",
         lambda text: text.replace("肾", "腎"),
@@ -64,6 +76,7 @@ def test_all_conditions_pass_exact_hotwords_and_load_model_once(
     run_benchmark(_args(benchmark, output), model_loader=loader)
 
     assert loader.call_count == 1
+    assert len(inference_entries) == 6
     actual = [call.kwargs["hotwords"] for call in model.generate.call_args_list]
     assert actual == [
         [], [],

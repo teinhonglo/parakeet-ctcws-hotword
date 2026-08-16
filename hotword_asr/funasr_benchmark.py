@@ -72,16 +72,21 @@ def transcribe_file(
     itn: bool,
     batch_size_s: float,
 ) -> dict[str, Any]:
+    import torch
+
     duration = _wav_duration(audio_path)
     started = time.perf_counter()
-    result = model.generate(
-        input=[str(audio_path)],
-        cache={},
-        language=language,
-        hotwords=hotwords,
-        itn=itn,
-        batch_size_s=batch_size_s,
-    )
+    # inference_mode includes no_grad semantics and additionally disables
+    # autograd bookkeeping/version tracking for this inference-only runner.
+    with torch.inference_mode():
+        result = model.generate(
+            input=[str(audio_path)],
+            cache={},
+            language=language,
+            hotwords=hotwords,
+            itn=itn,
+            batch_size_s=batch_size_s,
+        )
     elapsed = time.perf_counter() - started
     if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
         raise TypeError("FunASR generate() must return one dictionary for one input")
@@ -93,11 +98,7 @@ def transcribe_file(
     # this does not unload the shared model.
     del result
     gc.collect()
-    try:
-        import torch
-    except ImportError:
-        torch = None
-    if torch is not None and torch.cuda.is_available():
+    if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return {
         "audio_path": str(audio_path.resolve()),
