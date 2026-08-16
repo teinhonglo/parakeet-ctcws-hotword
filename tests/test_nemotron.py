@@ -9,7 +9,6 @@ from hotword_asr.nemotron_benchmark import (
     _transcription_text,
     configure_greedy_decoding,
     prepare_gpu_pb_hotwords,
-    select_vocabulary,
 )
 
 
@@ -46,17 +45,6 @@ def install_fake_omegaconf(monkeypatch) -> None:
     module = types.ModuleType("omegaconf")
     module.open_dict = lambda _: contextlib.nullcontext()
     monkeypatch.setitem(sys.modules, "omegaconf", module)
-
-
-def test_select_vocabulary_matches_existing_benchmark_policy() -> None:
-    hotword_map = {"1": ["洗腎", "elbew"], "2": ["洗腎", "X-RAY"]}
-    all_hotwords = ["洗腎", "elbow", "X-RAY"]
-    assert select_vocabulary(
-        hotword_map, all_hotwords, "ground-truth-union"
-    ) == ["elbew", "X-RAY", "洗腎"]
-    assert select_vocabulary(
-        hotword_map, all_hotwords, "all-hotwords"
-    ) == all_hotwords
 
 
 def test_prepare_gpu_pb_hotwords_preserves_source_entries(tmp_path: Path) -> None:

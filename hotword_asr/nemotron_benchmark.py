@@ -12,6 +12,7 @@ from .hotwords import (
     load_hotword_list,
     load_hotword_map,
 )
+from .conditions import build_hotwords_used, normalize_condition, write_hotwords_used
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .text_normalization import to_simplified_chinese, to_taiwan_traditional
@@ -50,15 +51,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--vocabulary-source",
-        choices=("ground-truth-union", "all-hotwords"),
-        default="ground-truth-union",
-        help=(
-            "Use the same global vocabulary selection rule as the Parakeet "
-            "CTC-WS benchmark."
-        ),
-    )
-    parser.add_argument(
         "--boosting-tree-alpha",
         type=float,
         default=1.0,
@@ -83,29 +75,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--condition",
-        choices=("both", "baseline", "gpu-pb"),
-        default="both",
+        choices=("all", "vanilla", "all-hotwords", "oracle-hotwords"),
+        default="all",
     )
     parser.add_argument(
         "--limit", type=int, default=None, help="Run only the first N files"
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
-
-
-def select_vocabulary(
-    hotword_map: dict[str, list[str]],
-    all_hotwords: list[str],
-    source: str,
-) -> list[str]:
-    if source == "ground-truth-union":
-        return sorted(
-            {word for words in hotword_map.values() for word in words},
-            key=str.casefold,
-        )
-    if source == "all-hotwords":
-        return list(all_hotwords)
-    raise ValueError(f"Unsupported vocabulary source: {source}")
 
 
 def load_model(model_name: str, device: str) -> Any:
@@ -321,12 +298,12 @@ def run_condition(
     chunk_seconds: float,
     target_lang: str,
     overwrite: bool,
+    hotwords_used: dict[str, list[str]],
+    configure_for_audio: Any | None = None,
 ) -> dict[str, Any]:
-    candidate_root = output_dir / (
-        "raw_asr" if condition_name == "baseline" else "gpu_pb_asr"
-    )
-    raw_root = output_dir / "raw_zh_cn" / condition_name
-    details_root = output_dir / "details" / condition_name
+    candidate_root = output_dir / "asr"
+    raw_root = output_dir / "raw_zh_cn"
+    details_root = output_dir / "details"
     per_audio: dict[str, dict[str, Any]] = {}
     inferred_audio_seconds = 0.0
     dataset_audio_seconds = 0.0
@@ -353,6 +330,8 @@ def run_condition(
                 f"[{condition_name} {index:02d}/{len(audio_ids)}] "
                 f"{audio_id}: {audio_path.name}"
             )
+            if configure_for_audio is not None:
+                configure_for_audio(audio_id)
             result = transcribe_file(
                 model,
                 audio_path,
@@ -360,6 +339,8 @@ def run_condition(
                 chunk_seconds=chunk_seconds,
                 target_lang=target_lang,
             )
+            result.update(audio_id=audio_id, condition=condition_name,
+                          hotwords_used=hotwords_used[audio_id])
             write_json(details_path, result)
             inferred_audio_seconds += float(result["duration_sec"])
             inferred_count += 1
@@ -407,14 +388,9 @@ def main() -> None:
     hotword_map = load_hotword_map(benchmark_dir / "hotwords.json")
     all_hotwords = load_hotword_list(benchmark_dir / "all_hotwords.json")
     vocabulary_check = compare_vocabularies(hotword_map, all_hotwords)
-    vocabulary = select_vocabulary(
-        hotword_map, all_hotwords, args.vocabulary_source
-    )
     write_json(output_dir / "benchmark_vocabulary_check.json", vocabulary_check)
-
-    phrase_file, simplified_vocabulary, phrase_sha256 = prepare_gpu_pb_hotwords(
-        vocabulary, output_dir
-    )
+    if vocabulary_check["missing_from_vocabulary"] or vocabulary_check["extra_in_vocabulary"]:
+        print("WARNING: hotwords.json and all_hotwords.json differ:", vocabulary_check)
 
     audio_ids = sorted(hotword_map, key=int)
     if args.limit is not None:
@@ -432,49 +408,44 @@ def main() -> None:
             raise ValueError(f"Invalid runtime metrics: {runtime_metrics_path}")
         runtime_metrics.update(existing_metrics)
 
-    if args.condition in {"both", "baseline"}:
-        configure_greedy_decoding(
-            model,
-            None,
-            boosting_tree_alpha=args.boosting_tree_alpha,
-            context_score=args.boosting_context_score,
-            depth_scaling=args.boosting_depth_scaling,
-            bpe_mode=args.boosting_bpe_mode,
-        )
-        runtime_metrics["baseline"] = run_condition(
-            condition_name="baseline",
-            model=model,
-            audio_ids=audio_ids,
-            benchmark_dir=benchmark_dir,
-            output_dir=output_dir,
-            device=args.device,
-            batch_size=args.batch_size,
-            chunk_seconds=args.chunk_seconds,
-            target_lang=args.target_lang,
-            overwrite=args.overwrite,
-        )
-
-    if args.condition in {"both", "gpu-pb"}:
-        configure_greedy_decoding(
-            model,
-            phrase_file,
-            boosting_tree_alpha=args.boosting_tree_alpha,
-            context_score=args.boosting_context_score,
-            depth_scaling=args.boosting_depth_scaling,
-            bpe_mode=args.boosting_bpe_mode,
-        )
-        runtime_metrics["gpu_pb"] = run_condition(
-            condition_name="gpu_pb",
-            model=model,
-            audio_ids=audio_ids,
-            benchmark_dir=benchmark_dir,
-            output_dir=output_dir,
-            device=args.device,
-            batch_size=args.batch_size,
-            chunk_seconds=args.chunk_seconds,
-            target_lang=args.target_lang,
-            overwrite=args.overwrite,
-        )
+    labels = {"vanilla": "Vanilla", "all_hotwords": "GPU-PB + All Hotwords", "oracle_hotwords": "GPU-PB + Oracle Hotwords"}
+    phrase_metadata: dict[str, Any] = {}
+    for condition in normalize_condition(args.condition):
+        print("=" * 40); print(f"Nemotron: {labels[condition]}"); print("=" * 40)
+        condition_dir = output_dir / condition
+        used = build_hotwords_used(condition, audio_ids, hotword_map, all_hotwords)
+        write_hotwords_used(condition_dir / "hotwords_used.json", used)
+        configure_for_audio = None
+        if condition == "vanilla":
+            configure_greedy_decoding(model, None, boosting_tree_alpha=args.boosting_tree_alpha,
+                context_score=args.boosting_context_score, depth_scaling=args.boosting_depth_scaling,
+                bpe_mode=args.boosting_bpe_mode)
+        elif condition == "all_hotwords":
+            phrase_file, simplified, digest = prepare_gpu_pb_hotwords(all_hotwords, condition_dir)
+            phrase_metadata[condition] = {"phrase_file": str(phrase_file), "sha256": digest, "size": len(simplified)}
+            configure_greedy_decoding(model, phrase_file, boosting_tree_alpha=args.boosting_tree_alpha,
+                context_score=args.boosting_context_score, depth_scaling=args.boosting_depth_scaling,
+                bpe_mode=args.boosting_bpe_mode)
+        else:
+            phrase_dir = condition_dir / "phrase_files"
+            def configure_oracle(audio_id: str) -> None:
+                phrase_file, simplified, digest = prepare_gpu_pb_hotwords(
+                    used[audio_id], phrase_dir / audio_id)
+                # Keep the requested auditable filename directly in phrase_files.
+                audit_file = phrase_dir / f"{audio_id}.txt"
+                audit_file.parent.mkdir(parents=True, exist_ok=True)
+                audit_file.write_text(phrase_file.read_text(encoding="utf-8"), encoding="utf-8")
+                phrase_metadata[audio_id] = {"phrase_file": str(audit_file), "sha256": digest, "size": len(simplified)}
+                configure_greedy_decoding(model, audit_file, boosting_tree_alpha=args.boosting_tree_alpha,
+                    context_score=args.boosting_context_score, depth_scaling=args.boosting_depth_scaling,
+                    bpe_mode=args.boosting_bpe_mode)
+            configure_for_audio = configure_oracle
+        runtime_metrics[condition] = run_condition(
+            condition_name=condition, model=model, audio_ids=audio_ids,
+            benchmark_dir=benchmark_dir, output_dir=condition_dir, device=args.device,
+            batch_size=args.batch_size, chunk_seconds=args.chunk_seconds,
+            target_lang=args.target_lang, overwrite=args.overwrite,
+            hotwords_used=used, configure_for_audio=configure_for_audio)
 
     run_config = {
         "model": args.model,
@@ -486,11 +457,12 @@ def main() -> None:
             "Hotwords are converted with OpenCC tw2s before GPU-PB and model "
             "output is converted with OpenCC s2tw before benchmark evaluation."
         ),
-        "vocabulary_source": args.vocabulary_source,
-        "source_vocabulary_size": len(vocabulary),
-        "gpu_pb_vocabulary_size": len(simplified_vocabulary),
-        "gpu_pb_phrase_file": str(phrase_file),
-        "gpu_pb_phrase_sha256": phrase_sha256,
+        "model_load_count": 1,
+        "conditions": {
+            "vanilla": {"hotword_source": None, "description": "No contextual biasing"},
+            "all_hotwords": {"hotword_source": "all_hotwords.json", "scope": "global"},
+            "oracle_hotwords": {"hotword_source": "hotwords.json[audio_id]", "scope": "per_audio_ground_truth"}},
+        "phrase_metadata": phrase_metadata,
         "gpu_pb_documentation": GPU_PB_DOCUMENTATION,
         "decoding": {
             "strategy": "greedy_batch",

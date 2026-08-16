@@ -9,17 +9,14 @@ fi
 benchmark_dir="$(cd "$1" && pwd)"
 exp_dir="$(cd "$2" && pwd)"
 
-ground_truth_dir="${exp_dir}/ground_truth_union"
-phrase_boosting_dir="${exp_dir}/phrase_boosting_vocabulary"
+python "${benchmark_dir}/evaluate.py" \
+  --candidate "${exp_dir}/vanilla/asr" \
+  --output "${exp_dir}/report_vanilla_asr.xlsx"
 
 python "${benchmark_dir}/evaluate.py" \
-  --candidate "${ground_truth_dir}/raw_asr" \
-  --output "${exp_dir}/report_raw_asr.xlsx"
+  --candidate "${exp_dir}/all_hotwords/asr" \
+  --output "${exp_dir}/report_gpu_pb_all_hotwords_asr.xlsx"
 
 python "${benchmark_dir}/evaluate.py" \
-  --candidate "${ground_truth_dir}/gpu_pb_asr" \
-  --output "${exp_dir}/report_gpu_pb_ground_truth_union_asr.xlsx"
-
-python "${benchmark_dir}/evaluate.py" \
-  --candidate "${phrase_boosting_dir}/gpu_pb_asr" \
-  --output "${exp_dir}/report_gpu_pb_phrase_boosting_vocabulary_asr.xlsx"
+  --candidate "${exp_dir}/oracle_hotwords/asr" \
+  --output "${exp_dir}/report_gpu_pb_oracle_hotwords_asr.xlsx"
