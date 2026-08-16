@@ -56,15 +56,18 @@ FunASR. It defaults to the official PyTorch CUDA 12.6 wheel index; set
 `FUNASR_TORCH_INDEX_URL` to the index matching the server's driver/toolkit when
 needed. It also disables Python user-site packages so an old `~/.local` FunASR
 cannot mask missing packages in `funasr_hotword`.
+
 One invocation installs the model runtime, audio loading, Hugging Face/ModelScope
 support, Traditional-Chinese output normalization, benchmark spreadsheet/ITN
 dependencies, and this local package. It finishes with `pip check`, dependency
 imports, and the local FunASR benchmark CLI check; no second requirements or
 project-install command is needed.
+
 The installer resolves the target environment's Python with `conda run -n
 funasr_hotword` and uses that exact executable for every pip/install/check
 command. `run_funasr.sh` also refuses to start inference when `AutoModel` is not
 importable and prints the selected environment, Python path, and repair command.
+
 For a fresh Conda environment, the installer creates the Python `site-packages`
 directory when it is not present and verifies writability with an actual probe
 file before installing packages.
@@ -72,6 +75,7 @@ file before installing packages.
 It is safe to run this after `source path.sh`. That command activates
 `parakeet_ctcws`, but it does not determine which Conda channels are queried;
 channel configuration comes from Conda's user/system configuration. The
+
 installer creates (or reuses) `funasr_hotword` and runs every install through
 that environment's absolute Python, so FunASR packages are not installed into
 `parakeet_ctcws`.

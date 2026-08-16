@@ -46,6 +46,7 @@ EOF
     exit 1
   fi
 fi
+
 env_python="$(conda run -n "${conda_env_name}" python -c 'import sys; print(sys.executable)')"
 if [[ ! -x "${env_python}" ]]; then
   echo "Could not resolve Python in Conda environment ${conda_env_name}: ${env_python}" >&2
@@ -53,6 +54,7 @@ if [[ ! -x "${env_python}" ]]; then
 fi
 echo "FunASR Python: ${env_python}"
 site_packages="$("${env_python}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+
 write_probe="${site_packages}/.funasr_install_write_test.$$"
 # A newly created conda-forge Python environment may not have created the
 # purelib directory yet. Test a real create/write operation instead of treating
@@ -66,7 +68,9 @@ Remove and recreate it as the current user:
 EOF
   exit 1
 fi
+
 rm -f "${write_probe}"
+
 "${env_python}" -m pip install --upgrade pip setuptools wheel
 
 # FunASR's AutoModel imports torch at runtime. Install a CUDA-enabled PyTorch
@@ -80,6 +84,7 @@ fi
 "${env_python}" -m pip check
 
 "${env_python}" - <<'PY'
+
 import sys
 from importlib.metadata import version
 import librosa
@@ -91,6 +96,7 @@ import transformers
 from opencc import OpenCC
 from funasr import AutoModel
 version("wetext")
+
 print("Python:", sys.executable)
 print("torch:", torch.__version__)
 print("torchaudio:", torchaudio.__version__)
@@ -99,6 +105,7 @@ print("FunASR inference dependencies: OK")
 print("Benchmark evaluation dependencies: OK")
 print("FunASR AutoModel import: OK")
 PY
+
 "${env_python}" -m hotword_asr.funasr_benchmark --help >/dev/null
 echo "Local FunASR benchmark entry point: OK"
 echo "Conda environment ready: ${conda_env_name}"
