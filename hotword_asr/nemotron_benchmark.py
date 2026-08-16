@@ -12,7 +12,11 @@ from .hotwords import (
     load_hotword_list,
     load_hotword_map,
 )
-from .conditions import build_hotwords_used, normalize_condition, write_hotwords_used
+from .conditions import (
+    build_hotwords_used,
+    normalize_condition,
+    write_hotwords_used,
+)
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .text_normalization import to_simplified_chinese, to_taiwan_traditional
@@ -321,6 +325,17 @@ def run_condition(
             from .hotwords import load_json
 
             result = load_json(details_path)
+            if result.get("hotwords_used") != hotwords_used[audio_id]:
+                raise AssertionError(
+                    f"Cached hotword audit mismatch for {condition_name} audio "
+                    f"{audio_id}: {result.get('hotwords_used')!r} != "
+                    f"{hotwords_used[audio_id]!r}"
+                )
+            if result.get("condition") != condition_name:
+                raise AssertionError(
+                    f"Cached details condition mismatch for {audio_id}: "
+                    f"{result.get('condition')!r} != {condition_name!r}"
+                )
             print(
                 f"[{condition_name} {index:02d}/{len(audio_ids)}] "
                 f"{audio_id}: skip existing"

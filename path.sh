@@ -8,7 +8,7 @@ if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
 elif command -v conda >/dev/null 2>&1; then
   conda_exe="$(command -v conda)"
 else
-  echo "conda was not found. Install Miniconda/Anaconda and rerun stage 0." >&2
+  echo "conda was not found. Install Miniconda/Anaconda and run scripts/install.sh." >&2
   return 1 2>/dev/null || exit 1
 fi
 
