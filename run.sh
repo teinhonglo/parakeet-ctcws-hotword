@@ -10,6 +10,7 @@ gpuid=0
 benchmark_dir="${project_root}/hotword_benchmark"
 model="${project_root}/models"
 exp_dir="${project_root}/exp/parakeet_ctcws"
+parakeet_conda_env="parakeet_ctcws"
 nemotron_model="nvidia/nemotron-3.5-asr-streaming-0.6b"
 nemotron_exp_dir="${project_root}/exp/nemotron_gpu_pb"
 nemotron_target_lang="zh-CN"
@@ -71,13 +72,13 @@ if (( stage <= 7 && stop_stage >= 2 )); then
   fi
 fi
 
-if (( stage <= 5 && stop_stage >= 1 )); then
-  . "${project_root}/path.sh"
-fi
+export PARAKEET_CONDA_ENV="${parakeet_conda_env}"
+export FUNASR_CONDA_ENV="${funasr_conda_env}"
 
 if (( stage <= 1 && stop_stage >= 1 )); then
   if ! find "${project_root}/models" -type f -name '*.nemo' -print -quit 2>/dev/null | grep -q .; then
-    bash "${project_root}/scripts/download_model.sh" "${project_root}/models"
+    bash "${project_root}/run_parakeet.sh" \
+      bash "${project_root}/scripts/download_model.sh" "${project_root}/models"
   else
     echo "Stage 1: existing .nemo checkpoint found, skip download"
   fi
@@ -97,11 +98,14 @@ if (( stage <= 2 && stop_stage >= 2 )); then
     if ${overwrite}; then
       infer_args+=(--overwrite)
     fi
-    CUDA_VISIBLE_DEVICES="${gpuid}" python -m hotword_asr.benchmark "${infer_args[@]}"
+    CUDA_VISIBLE_DEVICES="${gpuid}" bash "${project_root}/run_parakeet.sh" \
+      python -m hotword_asr.benchmark "${infer_args[@]}"
 fi
 
 if (( stage <= 3 && stop_stage >= 3 )); then
-  bash "${project_root}/scripts/evaluate_benchmark.sh" "${benchmark_dir}" "${exp_dir}"
+  bash "${project_root}/run_parakeet.sh" \
+    bash "${project_root}/scripts/evaluate_benchmark.sh" \
+    "${benchmark_dir}" "${exp_dir}"
 fi
 
 if (( stage <= 4 && stop_stage >= 4 )); then
@@ -124,11 +128,14 @@ if (( stage <= 4 && stop_stage >= 4 )); then
       nemotron_args+=(--overwrite)
     fi
     CUDA_VISIBLE_DEVICES="${gpuid}" \
-      python -m hotword_asr.nemotron_benchmark "${nemotron_args[@]}"
+      bash "${project_root}/run_nemotron.sh" \
+      python -m hotword_asr.nemotron_benchmark \
+      "${nemotron_args[@]}"
 fi
 
 if (( stage <= 5 && stop_stage >= 5 )); then
-  bash "${project_root}/scripts/evaluate_nemotron_benchmark.sh" \
+  bash "${project_root}/run_nemotron.sh" \
+    bash "${project_root}/scripts/evaluate_nemotron_benchmark.sh" \
     "${benchmark_dir}" "${nemotron_exp_dir}"
 fi
 
@@ -153,13 +160,13 @@ if (( stage <= 6 && stop_stage >= 6 )); then
   if ${overwrite}; then
     funasr_args+=(--overwrite)
   fi
-  CUDA_VISIBLE_DEVICES="${gpuid}" PYTHONPATH="${project_root}:${PYTHONPATH:-}" \
-    conda run --no-capture-output -n "${funasr_conda_env}" \
+  
+  CUDA_VISIBLE_DEVICES="${gpuid}" bash "${project_root}/run_funasr.sh" \
     python -m hotword_asr.funasr_benchmark "${funasr_args[@]}"
 fi
 
 if (( stage <= 7 && stop_stage >= 7 )); then
-  conda run --no-capture-output -n "${funasr_conda_env}" \
+  bash "${project_root}/run_funasr.sh" \
     bash "${project_root}/scripts/evaluate_funasr_benchmark.sh" \
     "${benchmark_dir}" "${funasr_exp_dir}"
 fi

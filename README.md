@@ -51,6 +51,21 @@ the existing `requirements.txt`:
 bash scripts/install_funasr.sh
 ```
 
+It is safe to run this after `source path.sh`. That command activates
+`parakeet_ctcws`, but it does not determine which Conda channels are queried;
+channel configuration comes from Conda's user/system configuration. The
+installer creates (or reuses) `funasr_hotword` and activates it before running
+any `pip install`, so FunASR packages are not installed into `parakeet_ctcws`.
+
+The installer creates the environment with `--override-channels` and uses only
+`conda-forge` by default, so unrelated channels in a user or system `.condarc`
+(such as an unavailable Intel package channel) cannot break this environment.
+Override it with `FUNASR_CONDA_CHANNEL=<channel>` if required. To diagnose a
+certificate error, first inspect `conda config --show-sources`. If all HTTPS
+channels fail behind an institutional proxy, configure the supplied CA bundle
+with `conda config --set ssl_verify /path/to/organization-ca-bundle.pem` rather
+than disabling SSL verification globally.
+
 The benchmark must retain its original layout:
 
 ```text
@@ -79,6 +94,27 @@ Parakeet evaluation, (4) all Nemotron inference, (5) all Nemotron evaluation,
 (6) all Fun-ASR-Nano inference, and (7) all Fun-ASR-Nano evaluation.
 `--limit N` selects the same first N IDs for every condition;
 `--overwrite` recomputes each selected condition's own cached result.
+
+`path.sh` selects an environment from `BACKEND`: `default`, `parakeet`, and
+`nemotron` activate `parakeet_ctcws`, while `funasr` activates
+`funasr_hotword`. `run.sh` delegates commands to `run_parakeet.sh`,
+`run_nemotron.sh`, or `run_funasr.sh`; each launcher activates its own backend
+environment and then replaces itself with the requested command. Consequently,
+Stages 1--5 cannot leak their NeMo environment into Stages 6--7. Optional
+`PARAKEET_CUDA_DIR` and `FUNASR_CUDA_DIR` select backend-specific CUDA toolkits;
+when unset, the existing system CUDA paths are preserved.
+Conda shell integration defaults to
+`/share/homes/teinhonglo/anaconda3/bin/conda shell.bash hook` for this server;
+an explicit `CONDA_EXE` or a `conda` executable on `PATH` remains a fallback for
+other installations and automated tests.
+
+The launchers can also be used directly, for example:
+
+```bash
+bash run_parakeet.sh python -m hotword_asr.benchmark --help
+bash run_nemotron.sh python -m hotword_asr.nemotron_benchmark --help
+bash run_funasr.sh python -m hotword_asr.funasr_benchmark --help
+```
 
 Stage 2 invokes one Python process and loads Parakeet once. Its shared model is
 used by Vanilla, one reusable global All-Hotwords graph, and per-audio Oracle

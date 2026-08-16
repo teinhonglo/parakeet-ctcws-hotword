@@ -65,6 +65,7 @@ def test_run_sh_routes_all_conditions_and_evaluations(tmp_path: Path) -> None:
     conda = fake_bin / "conda"
     conda.write_text(f'''#!/usr/bin/env bash
 if [[ $1 == info ]]; then echo {conda_base!s}; exit 0; fi
+if [[ $1 == activate ]]; then echo "$2" >> "$RUN_SH_CONDA_ENVS"; exit 0; fi
 if [[ $1 == run ]]; then
   shift
   while [[ $1 == --no-capture-output || $1 == -n ]]; do
@@ -77,6 +78,7 @@ fi
     conda.chmod(0o755)
 
     calls = tmp_path / "python-calls.txt"
+    conda_envs = tmp_path / "conda-envs.txt"
     python = fake_bin / "python"
     python.write_text(
         "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$RUN_SH_CALLS\"\n",
@@ -85,7 +87,8 @@ fi
     python.chmod(0o755)
     environment = os.environ.copy()
     environment.update(
-        PATH=f"{fake_bin}:{environment['PATH']}", RUN_SH_CALLS=str(calls)
+        PATH=f"{fake_bin}:{environment['PATH']}", RUN_SH_CALLS=str(calls),
+        RUN_SH_CONDA_ENVS=str(conda_envs),
     )
     parakeet_exp = tmp_path / "parakeet-exp"
     nemotron_exp = tmp_path / "nemotron-exp"
@@ -133,3 +136,7 @@ fi
     assert "Parakeet" in result.stdout
     assert "Nemotron" in result.stdout
     assert "Fun-ASR-Nano" in result.stdout
+    assert conda_envs.read_text(encoding="utf-8").splitlines() == [
+        "parakeet_ctcws", "parakeet_ctcws", "parakeet_ctcws",
+        "parakeet_ctcws", "funasr_hotword", "funasr_hotword",
+    ]
