@@ -5,7 +5,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .conditions import build_hotwords_used, normalize_condition, write_hotwords_used
+from .conditions import (
+    build_hotwords_used,
+    normalize_condition,
+    validate_hotwords_used,
+    write_hotwords_used,
+)
 from .engine import CTCWSConfig, CTCWordSpotterASR
 from .hotwords import compare_vocabularies, load_aliases, load_hotword_list, load_hotword_map
 from .io import write_json, write_transcription
@@ -72,6 +77,18 @@ def run_benchmark(args: argparse.Namespace) -> None:
             if details_path.exists() and not args.overwrite:
                 from .hotwords import load_json
                 result = load_json(details_path); print(f"[{index:02d}/{len(audio_ids)}] {audio_id}: skip existing")
+                validate_hotwords_used(
+                    condition,
+                    {audio_id: result.get("hotwords_used")},
+                    [audio_id],
+                    hotword_map,
+                    all_hotwords,
+                )
+                if result.get("condition") != condition:
+                    raise AssertionError(
+                        f"Cached details condition mismatch for {audio_id}: "
+                        f"{result.get('condition')!r} != {condition!r}"
+                    )
             else:
                 words = used[audio_id]
                 engine = all_engine if condition == "all_hotwords" else CTCWordSpotterASR(model, words, config=config, aliases=aliases)

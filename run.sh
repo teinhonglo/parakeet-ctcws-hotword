@@ -4,8 +4,8 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 stage=1
-#NOTE: Keep the established Parakeet-only default. Nemotron remains an explicit
-# stage 4-5 experiment so an ordinary run does not unexpectedly load two models.
+# The default range deliberately reaches Stage 5: one invocation runs all six
+# primary experiments and both model-specific evaluations.
 stop_stage=10000
 gpuid=0
 benchmark_dir="${project_root}/hotword_benchmark"
@@ -33,8 +33,38 @@ for arg in "$@"; do
 done
 set -- "${normalized_args[@]}"
 
-. ./local/parse_options.sh
-. ./path.sh
+. "${project_root}/local/parse_options.sh"
+
+if ! [[ "${stage}" =~ ^[0-9]+$ && "${stop_stage}" =~ ^[0-9]+$ ]]; then
+  echo "run.sh: --stage and --stop-stage must be non-negative integers" >&2
+  exit 2
+fi
+if (( stage > stop_stage )); then
+  echo "run.sh: --stage (${stage}) cannot exceed --stop-stage (${stop_stage})" >&2
+  exit 2
+fi
+if [[ -n "${limit}" ]] && ! [[ "${limit}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "run.sh: --limit must be a positive integer" >&2
+  exit 2
+fi
+
+# Fail before activating the heavyweight runtime when the requested benchmark
+# cannot possibly run. This also gives a useful error for misspelled paths.
+if (( stage <= 5 && stop_stage >= 2 )); then
+  required_benchmark_files=(hotwords.json all_hotwords.json evaluate.py)
+  for required_file in "${required_benchmark_files[@]}"; do
+    if [[ ! -f "${benchmark_dir}/${required_file}" ]]; then
+      echo "run.sh: missing benchmark file: ${benchmark_dir}/${required_file}" >&2
+      exit 2
+    fi
+  done
+  if [[ ! -d "${benchmark_dir}/audio" ]]; then
+    echo "run.sh: missing benchmark audio directory: ${benchmark_dir}/audio" >&2
+    exit 2
+  fi
+fi
+
+. "${project_root}/path.sh"
 
 if (( stage <= 1 && stop_stage >= 1 )); then
   if ! find "${project_root}/models" -type f -name '*.nemo' -print -quit 2>/dev/null | grep -q .; then
@@ -93,7 +123,7 @@ if (( stage <= 5 && stop_stage >= 5 )); then
     "${benchmark_dir}" "${nemotron_exp_dir}"
 fi
 
-if (( stage <= 5 && stop_stage >= 5 )); then
+if (( stage <= 2 && stop_stage >= 5 )); then
   cat <<'EOF'
 Completed experiments:
 

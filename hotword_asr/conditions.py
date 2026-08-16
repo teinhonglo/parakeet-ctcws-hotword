@@ -39,14 +39,29 @@ def build_hotwords_used(
         audio_id: select_hotwords(condition, audio_id, hotword_map, all_hotwords)
         for audio_id in audio_ids
     }
+    validate_hotwords_used(condition, used, audio_ids, hotword_map, all_hotwords)
+    return used
+
+
+def validate_hotwords_used(
+    condition: str,
+    used: dict[str, list[str]],
+    audio_ids: list[str],
+    hotword_map: dict[str, list[str]],
+    all_hotwords: list[str],
+) -> None:
+    """Fail fast unless every audio received the condition's exact vocabulary."""
     for audio_id in audio_ids:
         expected = select_hotwords(condition, audio_id, hotword_map, all_hotwords)
+        if audio_id not in used:
+            raise AssertionError(
+                f"{condition} hotword audit is missing audio {audio_id}"
+            )
         if used[audio_id] != expected:
             raise AssertionError(
                 f"{condition} hotword audit mismatch for audio {audio_id}: "
                 f"{used[audio_id]!r} != {expected!r}"
             )
-    return used
 
 
 def write_hotwords_used(path: Path, used: dict[str, list[str]]) -> None:
