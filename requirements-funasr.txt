@@ -1,0 +1,10 @@
+# Keep FunASR dependencies out of requirements.txt: the latter is installed in
+# the existing Parakeet/NeMo environment, which must remain isolated.
+-r requirements.txt
+
+funasr
+modelscope
+huggingface_hub
+opencc-python-reimplemented
+torch
+torchaudio
