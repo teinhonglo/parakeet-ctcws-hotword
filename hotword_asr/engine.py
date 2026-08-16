@@ -130,7 +130,9 @@ class CTCWordSpotterASR:
             # Older NeMo releases do not expose the verbose argument.
             return self.model.transcribe(chunk_paths, **kwargs)
 
-    def transcribe_file(self, audio_path: str | Path) -> dict[str, Any]:
+    def transcribe_file(
+        self, audio_path: str | Path, *, enable_ctcws: bool = True
+    ) -> dict[str, Any]:
         audio_path = Path(audio_path).resolve()
         audio, sample_rate = _load_audio(audio_path)
         duration = len(audio) / sample_rate
@@ -180,7 +182,7 @@ class CTCWordSpotterASR:
                     beam_threshold=self.config.beam_threshold,
                     cb_weight=self.config.context_score,
                     ctc_ali_token_weight=self.config.ctc_ali_token_weight,
-                )
+                ) if enable_ctcws else []
                 greedy = np.argmax(logprobs, axis=1)
                 if ws_hyps:
                     merged_text, merge_raw_text = (

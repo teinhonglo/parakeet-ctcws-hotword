@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-from opencc import OpenCC
+from functools import lru_cache
 
 
-# The benchmark labels use Taiwan Traditional Chinese, while the zh-CN model
-# produces Simplified Chinese token posteriors and transcription text.
-_TO_SIMPLIFIED = OpenCC("tw2s.json")
-_TO_TAIWAN_TRADITIONAL = OpenCC("s2tw.json")
+@lru_cache(maxsize=2)
+def _converter(config: str):
+    # Keep OpenCC optional at module-import time so model-independent condition
+    # selection/tests do not require the inference environment.
+    from opencc import OpenCC
+
+    return OpenCC(config)
 
 
 def to_simplified_chinese(text: str) -> str:
     """Convert Taiwan Traditional Chinese to Simplified Chinese for CTC paths."""
-    return _TO_SIMPLIFIED.convert(text)
+    return _converter("tw2s.json").convert(text)
 
 
 def to_taiwan_traditional(text: str) -> str:
     """Normalize ASR output to Taiwan Traditional Chinese for output/scoring."""
-    return _TO_TAIWAN_TRADITIONAL.convert(text)
+    return _converter("s2tw.json").convert(text)

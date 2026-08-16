@@ -12,14 +12,24 @@ exp_dir="${project_root}/exp/parakeet_ctcws"
 nemotron_model="nvidia/nemotron-3.5-asr-streaming-0.6b"
 nemotron_exp_dir="${project_root}/exp/nemotron_gpu_pb"
 nemotron_target_lang="zh-CN"
-ground_truth_vocabulary_source="ground-truth-union"
-phrase_boosting_vocabulary_source="all-hotwords"
 nemotron_boosting_tree_alpha=1.0
 nemotron_boosting_context_score=1.0
 nemotron_boosting_depth_scaling=2.0
 nemotron_boosting_bpe_mode="case_insensitive"
 overwrite=false
 limit=""
+
+# Kaldi's parse_options.sh normally requires an explicit value for booleans.
+# Accept the conventional standalone --overwrite requested by this runner too.
+normalized_args=()
+for arg in "$@"; do
+  if [[ "${arg}" == "--overwrite" ]]; then
+    normalized_args+=(--overwrite true)
+  else
+    normalized_args+=("${arg}")
+  fi
+done
+set -- "${normalized_args[@]}"
 
 . ./local/parse_options.sh
 . ./path.sh
@@ -33,18 +43,12 @@ if (( stage <= 1 && stop_stage >= 1 )); then
 fi
 
 if (( stage <= 2 && stop_stage >= 2 )); then
-  for vocabulary_name in ground_truth_union phrase_boosting_vocabulary; do
-    if [[ "${vocabulary_name}" == ground_truth_union ]]; then
-      vocabulary_source="${ground_truth_vocabulary_source}"
-    else
-      vocabulary_source="${phrase_boosting_vocabulary_source}"
-    fi
     infer_args=(
       --benchmark-dir "${benchmark_dir}"
       --model "${model}"
-      --output-dir "${exp_dir}/${vocabulary_name}"
+      --output-dir "${exp_dir}"
       --device cuda
-      --vocabulary-source "${vocabulary_source}"
+      --condition all
     )
     if [[ -n "${limit}" ]]; then
       infer_args+=(--limit "${limit}")
@@ -53,7 +57,6 @@ if (( stage <= 2 && stop_stage >= 2 )); then
       infer_args+=(--overwrite)
     fi
     CUDA_VISIBLE_DEVICES="${gpuid}" python -m hotword_asr.benchmark "${infer_args[@]}"
-  done
 fi
 
 if (( stage <= 3 && stop_stage >= 3 )); then
@@ -61,22 +64,13 @@ if (( stage <= 3 && stop_stage >= 3 )); then
 fi
 
 if (( stage <= 4 && stop_stage >= 4 )); then
-  for vocabulary_name in ground_truth_union phrase_boosting_vocabulary; do
-    if [[ "${vocabulary_name}" == ground_truth_union ]]; then
-      vocabulary_source="${ground_truth_vocabulary_source}"
-      condition=both
-    else
-      vocabulary_source="${phrase_boosting_vocabulary_source}"
-      condition=gpu-pb
-    fi
     nemotron_args=(
       --benchmark-dir "${benchmark_dir}"
       --model "${nemotron_model}"
-      --output-dir "${nemotron_exp_dir}/${vocabulary_name}"
+      --output-dir "${nemotron_exp_dir}"
       --device cuda
       --target-lang "${nemotron_target_lang}"
-      --vocabulary-source "${vocabulary_source}"
-      --condition "${condition}"
+      --condition all
       --boosting-tree-alpha "${nemotron_boosting_tree_alpha}"
       --boosting-context-score "${nemotron_boosting_context_score}"
       --boosting-depth-scaling "${nemotron_boosting_depth_scaling}"
@@ -90,10 +84,25 @@ if (( stage <= 4 && stop_stage >= 4 )); then
     fi
     CUDA_VISIBLE_DEVICES="${gpuid}" \
       python -m hotword_asr.nemotron_benchmark "${nemotron_args[@]}"
-  done
 fi
 
 if (( stage <= 5 && stop_stage >= 5 )); then
   bash "${project_root}/scripts/evaluate_nemotron_benchmark.sh" \
     "${benchmark_dir}" "${nemotron_exp_dir}"
+fi
+
+if (( stage <= 5 && stop_stage >= 5 )); then
+  cat <<'EOF'
+Completed experiments:
+
+Parakeet
+  [OK] Vanilla
+  [OK] CTC-WS + All Hotwords
+  [OK] CTC-WS + Oracle Hotwords
+
+Nemotron
+  [OK] Vanilla
+  [OK] GPU-PB + All Hotwords
+  [OK] GPU-PB + Oracle Hotwords
+EOF
 fi
