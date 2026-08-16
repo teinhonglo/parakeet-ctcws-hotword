@@ -24,6 +24,7 @@ funasr_language="中文"
 funasr_itn=false
 funasr_vad_model="fsmn-vad"
 funasr_max_single_segment_time=30000
+funasr_batch_size_s=30
 funasr_hub="hf"
 funasr_conda_env="funasr_hotword"
 overwrite=false
@@ -149,6 +150,7 @@ if (( stage <= 6 && stop_stage >= 6 )); then
     --language "${funasr_language}"
     --vad-model "${funasr_vad_model}"
     --max-single-segment-time "${funasr_max_single_segment_time}"
+    --batch-size-s "${funasr_batch_size_s}"
     --hub "${funasr_hub}"
   )
   if ${funasr_itn}; then
@@ -160,7 +162,6 @@ if (( stage <= 6 && stop_stage >= 6 )); then
   if ${overwrite}; then
     funasr_args+=(--overwrite)
   fi
-  
   CUDA_VISIBLE_DEVICES="${gpuid}" bash "${project_root}/run_funasr.sh" \
     python -m hotword_asr.funasr_benchmark "${funasr_args[@]}"
 fi

@@ -54,7 +54,6 @@ if [[ ! -x "${env_python}" ]]; then
 fi
 echo "FunASR Python: ${env_python}"
 site_packages="$("${env_python}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-
 write_probe="${site_packages}/.funasr_install_write_test.$$"
 # A newly created conda-forge Python environment may not have created the
 # purelib directory yet. Test a real create/write operation instead of treating

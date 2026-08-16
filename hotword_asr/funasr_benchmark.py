@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import gc
+
 import time
 import wave
 from pathlib import Path
@@ -32,6 +34,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--itn", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--vad-model", default="fsmn-vad")
     parser.add_argument("--max-single-segment-time", type=int, default=30000)
+    parser.add_argument(
+        "--batch-size-s", type=float, default=30.0,
+        help="Maximum accumulated VAD audio seconds per inference batch",
+    )
     parser.add_argument("--hub", default="hf")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--overwrite", action="store_true")
@@ -65,22 +71,38 @@ def transcribe_file(
     hotwords: list[str],
     language: str,
     itn: bool,
+    batch_size_s: float,
 ) -> dict[str, Any]:
+    import torch
+
     duration = _wav_duration(audio_path)
     started = time.perf_counter()
-    result = model.generate(
-        input=[str(audio_path)],
-        cache={},
-        language=language,
-        hotwords=hotwords,
-        itn=itn,
-    )
+    # inference_mode includes no_grad semantics and additionally disables
+    # autograd bookkeeping/version tracking for this inference-only runner.
+    with torch.inference_mode():
+        result = model.generate(
+            input=[str(audio_path)],
+            cache={},
+            language=language,
+            hotwords=hotwords,
+            itn=itn,
+            batch_size_s=batch_size_s,
+        )
     elapsed = time.perf_counter() - started
     if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
         raise TypeError("FunASR generate() must return one dictionary for one input")
     text = result[0].get("text")
     if not isinstance(text, str):
         raise TypeError("FunASR result dictionary does not contain string field 'text'")
+        
+    # FunASR's VAD path can leave large temporary generation buffers in the
+    # CUDA caching allocator. Release them before the next audio/condition;
+    # this does not unload the shared model.
+    del result
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return {
         "audio_path": str(audio_path.resolve()),
         "duration_sec": round(duration, 4),
@@ -101,6 +123,9 @@ def run_benchmark(
         raise ValueError("--limit must be positive")
     if args.max_single_segment_time <= 0:
         raise ValueError("--max-single-segment-time must be positive")
+        
+    if args.batch_size_s <= 0:
+        raise ValueError("--batch-size-s must be positive")
 
     benchmark_dir = args.benchmark_dir.resolve()
     output_dir = args.output_dir.resolve()
@@ -152,12 +177,18 @@ def run_benchmark(
             else:
                 # This exact list is both sent to the model and retained in both audits.
                 model_hotwords = list(expected)
-                result = transcribe_file(model, audio_path, hotwords=model_hotwords, language=args.language, itn=args.itn)
+                
+                result = transcribe_file(
+                    model, audio_path, hotwords=model_hotwords,
+                    language=args.language, itn=args.itn,
+                    batch_size_s=args.batch_size_s,
+                )
                 evaluation_text = to_taiwan_traditional(result["raw_text"])
                 result.update(
                     audio_id=audio_id, condition=condition,
                     hotwords_used=list(expected), model_hotwords=model_hotwords,
                     language=args.language, itn=args.itn,
+                    batch_size_s=args.batch_size_s,
                     evaluation_text=evaluation_text,
                 )
                 write_json(details_path, result)
@@ -179,6 +210,7 @@ def run_benchmark(
         "language": args.language, "itn": args.itn, "hub": args.hub,
         "vad_model": args.vad_model,
         "vad_kwargs": {"max_single_segment_time": args.max_single_segment_time},
+        "batch_size_s": args.batch_size_s,
         "conditions": {
             "vanilla": {"hotword_source": None},
             "all_hotwords": {"hotword_source": "all_hotwords.json", "scope": "global"},
