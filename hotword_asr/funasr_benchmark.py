@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+
 import time
 import wave
 from pathlib import Path
@@ -93,6 +94,7 @@ def transcribe_file(
     text = result[0].get("text")
     if not isinstance(text, str):
         raise TypeError("FunASR result dictionary does not contain string field 'text'")
+        
     # FunASR's VAD path can leave large temporary generation buffers in the
     # CUDA caching allocator. Release them before the next audio/condition;
     # this does not unload the shared model.
@@ -100,6 +102,7 @@ def transcribe_file(
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
     return {
         "audio_path": str(audio_path.resolve()),
         "duration_sec": round(duration, 4),
@@ -120,6 +123,7 @@ def run_benchmark(
         raise ValueError("--limit must be positive")
     if args.max_single_segment_time <= 0:
         raise ValueError("--max-single-segment-time must be positive")
+        
     if args.batch_size_s <= 0:
         raise ValueError("--batch-size-s must be positive")
 
@@ -173,6 +177,7 @@ def run_benchmark(
             else:
                 # This exact list is both sent to the model and retained in both audits.
                 model_hotwords = list(expected)
+                
                 result = transcribe_file(
                     model, audio_path, hotwords=model_hotwords,
                     language=args.language, itn=args.itn,
