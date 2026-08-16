@@ -8,6 +8,7 @@ def test_funasr_requirements_and_installer_include_pytorch() -> None:
     requirements = (ROOT / "requirements-funasr.txt").read_text(encoding="utf-8")
     assert "torch\n" in requirements
     assert "torchaudio\n" in requirements
+    
     for package in ("transformers", "sentencepiece", "safetensors", "soundfile", "librosa"):
         assert f"{package}\n" in requirements
 

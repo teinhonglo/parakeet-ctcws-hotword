@@ -4,6 +4,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 conda_env_name="${FUNASR_CONDA_ENV:-funasr_hotword}"
 conda_channel="${FUNASR_CONDA_CHANNEL:-conda-forge}"
+
 torch_index_url="${FUNASR_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu126}"
 
 # Never read or install packages from ~/.local. A user-site FunASR can mask a
@@ -65,6 +66,7 @@ python -m pip install --upgrade pip setuptools wheel
 if ! python -c 'import torch, torchaudio' >/dev/null 2>&1; then
   python -m pip install torch torchaudio --index-url "${torch_index_url}"
 fi
+
 python -m pip install -r "${project_root}/requirements-funasr.txt"
 python -m pip install -e "${project_root}"
 python -m pip check
@@ -81,14 +83,17 @@ import transformers
 from opencc import OpenCC
 from funasr import AutoModel
 version("wetext")
+
 print("Python:", sys.executable)
 print("torch:", torch.__version__)
 print("torchaudio:", torchaudio.__version__)
 print("CUDA available:", torch.cuda.is_available())
+
 print("FunASR inference dependencies: OK")
 print("Benchmark evaluation dependencies: OK")
 print("FunASR AutoModel import: OK")
 PY
 python -m hotword_asr.funasr_benchmark --help >/dev/null
 echo "Local FunASR benchmark entry point: OK"
+
 echo "Conda environment ready: ${conda_env_name}"

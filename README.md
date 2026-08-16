@@ -56,6 +56,7 @@ FunASR. It defaults to the official PyTorch CUDA 12.6 wheel index; set
 `FUNASR_TORCH_INDEX_URL` to the index matching the server's driver/toolkit when
 needed. It also disables Python user-site packages so an old `~/.local` FunASR
 cannot mask missing packages in `funasr_hotword`.
+
 One invocation installs the model runtime, audio loading, Hugging Face/ModelScope
 support, Traditional-Chinese output normalization, benchmark spreadsheet/ITN
 dependencies, and this local package. It finishes with `pip check`, dependency
