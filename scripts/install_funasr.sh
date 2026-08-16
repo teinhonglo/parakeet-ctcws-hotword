@@ -55,7 +55,11 @@ fi
 echo "FunASR Python: ${env_python}"
 site_packages="$("${env_python}" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 
-if [[ ! -d "${site_packages}" || ! -w "${site_packages}" ]]; then
+write_probe="${site_packages}/.funasr_install_write_test.$$"
+# A newly created conda-forge Python environment may not have created the
+# purelib directory yet. Test a real create/write operation instead of treating
+# a missing directory as proof that the environment is not writable.
+if ! mkdir -p "${site_packages}" || ! (umask 077 && : > "${write_probe}"); then
   cat >&2 <<EOF
 The target environment is not writable: ${site_packages}
 Remove and recreate it as the current user:
@@ -64,6 +68,8 @@ Remove and recreate it as the current user:
 EOF
   exit 1
 fi
+
+rm -f "${write_probe}"
 
 "${env_python}" -m pip install --upgrade pip setuptools wheel
 
@@ -99,7 +105,6 @@ print("FunASR inference dependencies: OK")
 print("Benchmark evaluation dependencies: OK")
 print("FunASR AutoModel import: OK")
 PY
-
 
 "${env_python}" -m hotword_asr.funasr_benchmark --help >/dev/null
 echo "Local FunASR benchmark entry point: OK"

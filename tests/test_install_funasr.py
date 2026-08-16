@@ -22,3 +22,5 @@ def test_funasr_requirements_and_installer_include_pytorch() -> None:
     assert '"${env_python}" -m hotword_asr.funasr_benchmark --help' in installer
     assert 'env_python="$(conda run -n' in installer
     assert '"${env_python}" -m pip install' in installer
+    assert 'mkdir -p "${site_packages}"' in installer
+    assert '.funasr_install_write_test' in installer

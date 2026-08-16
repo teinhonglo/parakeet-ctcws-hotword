@@ -68,6 +68,10 @@ funasr_hotword` and uses that exact executable for every pip/install/check
 command. `run_funasr.sh` also refuses to start inference when `AutoModel` is not
 importable and prints the selected environment, Python path, and repair command.
 
+For a fresh Conda environment, the installer creates the Python `site-packages`
+directory when it is not present and verifies writability with an actual probe
+file before installing packages.
+
 It is safe to run this after `source path.sh`. That command activates
 `parakeet_ctcws`, but it does not determine which Conda channels are queried;
 channel configuration comes from Conda's user/system configuration. The
