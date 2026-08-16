@@ -160,6 +160,7 @@ if (( stage <= 6 && stop_stage >= 6 )); then
   if ${overwrite}; then
     funasr_args+=(--overwrite)
   fi
+
   CUDA_VISIBLE_DEVICES="${gpuid}" bash "${project_root}/run_funasr.sh" \
     python -m hotword_asr.funasr_benchmark "${funasr_args[@]}"
 fi
