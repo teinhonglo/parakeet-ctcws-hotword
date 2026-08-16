@@ -4,17 +4,19 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 conda_env_name="${CONDA_ENV_NAME:-parakeet_ctcws}"
 
+default_conda_exe="/share/homes/teinhonglo/anaconda3/bin/conda"
 if [[ -n "${CONDA_EXE:-}" && -x "${CONDA_EXE}" ]]; then
   conda_exe="${CONDA_EXE}"
+elif [[ -x "${default_conda_exe}" ]]; then
+  conda_exe="${default_conda_exe}"
 elif command -v conda >/dev/null 2>&1; then
   conda_exe="$(command -v conda)"
 else
-  echo "conda was not found. Install Miniconda or Anaconda first." >&2
+  echo "conda was not found at ${default_conda_exe} or on PATH." >&2
   exit 1
 fi
 
-conda_base="$("${conda_exe}" info --base)"
-source "${conda_base}/etc/profile.d/conda.sh"
+eval "$("${conda_exe}" shell.bash hook)"
 
 if conda env list | awk -v env="${conda_env_name}" '$1 == env {found=1} END {exit !found}'; then
   echo "Conda environment exists, reuse: ${conda_env_name}"

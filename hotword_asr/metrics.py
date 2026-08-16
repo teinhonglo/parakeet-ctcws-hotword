@@ -19,18 +19,24 @@ class RuntimeMeter:
         self.start_rss_mb = 0.0
 
     def start(self) -> None:
-        import torch
+        try:
+            import torch
+        except ImportError:
+            torch = None
 
         self.start_rss_mb = _max_rss_mb()
-        if self.device.startswith("cuda") and torch.cuda.is_available():
+        if torch is not None and self.device.startswith("cuda") and torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
         self.started_at = time.perf_counter()
 
     def stop(self, audio_seconds: float) -> dict[str, float | None]:
-        import torch
+        try:
+            import torch
+        except ImportError:
+            torch = None
 
-        if self.device.startswith("cuda") and torch.cuda.is_available():
+        if torch is not None and self.device.startswith("cuda") and torch.cuda.is_available():
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - self.started_at
         result: dict[str, float | None] = {
@@ -43,7 +49,7 @@ class RuntimeMeter:
             "peak_gpu_allocated_mb": None,
             "peak_gpu_reserved_mb": None,
         }
-        if self.device.startswith("cuda") and torch.cuda.is_available():
+        if torch is not None and self.device.startswith("cuda") and torch.cuda.is_available():
             result["peak_gpu_allocated_mb"] = round(
                 torch.cuda.max_memory_allocated() / (1024**2), 2
             )
@@ -51,4 +57,3 @@ class RuntimeMeter:
                 torch.cuda.max_memory_reserved() / (1024**2), 2
             )
         return result
-
