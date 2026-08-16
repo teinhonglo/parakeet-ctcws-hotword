@@ -51,6 +51,12 @@ the existing `requirements.txt`:
 bash scripts/install_funasr.sh
 ```
 
+The installer explicitly installs `torch` and `torchaudio` before importing
+FunASR. It defaults to the official PyTorch CUDA 12.6 wheel index; set
+`FUNASR_TORCH_INDEX_URL` to the index matching the server's driver/toolkit when
+needed. It also disables Python user-site packages so an old `~/.local` FunASR
+cannot mask missing packages in `funasr_hotword`.
+
 It is safe to run this after `source path.sh`. That command activates
 `parakeet_ctcws`, but it does not determine which Conda channels are queried;
 channel configuration comes from Conda's user/system configuration. The
