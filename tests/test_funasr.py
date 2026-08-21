@@ -33,8 +33,8 @@ def _benchmark(root: Path) -> Path:
 def _args(benchmark: Path, output: Path, **updates) -> argparse.Namespace:
     values = dict(
         benchmark_dir=benchmark, output_dir=output, model="test-model",
-        device="cpu", condition="all", language="中文", itn=False,
-        vad_model="fsmn-vad", max_single_segment_time=30000, hub="hf",
+        device="cpu", condition="all", language="中文", itn=True,
+        vad_model="funasr/fsmn-vad", max_single_segment_time=30000, hub="hf",
         batch_size_s=30.0,
         limit=None, overwrite=False,
     )

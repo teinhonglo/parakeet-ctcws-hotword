@@ -16,6 +16,7 @@ from .hotwords import compare_vocabularies, load_aliases, load_hotword_list, loa
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .model import load_ctc_model
+from .provenance import require_matching_signature, run_signature
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,13 +26,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("exp/parakeet_ctcws"))
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--chunk-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--chunk-seconds",
+        type=float,
+        default=30.0,
+        help="Hard chunk length; 0 transcribes each recording whole",
+    )
     parser.add_argument("--beam-threshold", type=float, default=7.0)
     parser.add_argument("--context-score", type=float, default=3.0)
     parser.add_argument("--ctc-ali-token-weight", type=float, default=0.5)
     parser.add_argument("--aliases", type=Path)
     parser.add_argument("--condition", choices=("all", "vanilla", "all-hotwords", "oracle-hotwords"), default="all")
-    parser.add_argument("--no-auto-variants", action="store_true")
+    variants = parser.add_mutually_exclusive_group()
+    variants.add_argument(
+        "--auto-variants",
+        action="store_true",
+        help="Opt in to heuristic case/acronym/separator hotword variants",
+    )
+    variants.add_argument(
+        "--no-auto-variants",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -54,10 +70,24 @@ def run_benchmark(args: argparse.Namespace) -> None:
     if args.limit is not None: audio_ids = audio_ids[:args.limit]
     conditions = normalize_condition(args.condition)
     aliases = load_aliases(args.aliases)
-    config = CTCWSConfig(args.beam_threshold, args.context_score, args.ctc_ali_token_weight, args.chunk_seconds, args.batch_size, not args.no_auto_variants)
+    config = CTCWSConfig(
+        args.beam_threshold,
+        args.context_score,
+        args.ctc_ali_token_weight,
+        args.chunk_seconds,
+        args.batch_size,
+        args.auto_variants and not args.no_auto_variants,
+    )
 
     print(f"Loading model once: {args.model}")
     model = load_ctc_model(args.model, args.device)
+    signature_base = {
+        "backend": "parakeet_ctcws",
+        "model": str(args.model),
+        "device": str(args.device),
+        "ctcws": vars(config),
+        "aliases": aliases,
+    }
     runtimes: dict[str, Any] = {}
     all_engine = None
     for condition in conditions:
@@ -73,10 +103,22 @@ def run_benchmark(args: argparse.Namespace) -> None:
         audio_seconds = 0.0
         meter = RuntimeMeter(args.device); meter.start(); started = time.time()
         for index, audio_id in enumerate(audio_ids, 1):
+            words = used[audio_id]
+            signature = run_signature(
+                {
+                    **signature_base,
+                    "condition": condition,
+                    "audio_id": audio_id,
+                    "hotwords": words,
+                }
+            )
             details_path = condition_dir / "details" / f"{audio_id}.json"
             if details_path.exists() and not args.overwrite:
                 from .hotwords import load_json
                 result = load_json(details_path); print(f"[{index:02d}/{len(audio_ids)}] {audio_id}: skip existing")
+                require_matching_signature(
+                    result, signature, context=f"Parakeet {condition} audio {audio_id}"
+                )
                 validate_hotwords_used(
                     condition,
                     {audio_id: result.get("hotwords_used")},
@@ -90,10 +132,14 @@ def run_benchmark(args: argparse.Namespace) -> None:
                         f"{result.get('condition')!r} != {condition!r}"
                     )
             else:
-                words = used[audio_id]
                 engine = all_engine if condition == "all_hotwords" else CTCWordSpotterASR(model, words, config=config, aliases=aliases)
                 result = engine.transcribe_file(benchmark_dir / "audio" / f"{audio_id}.wav", enable_ctcws=condition != "vanilla")
-                result.update(audio_id=audio_id, condition=condition, hotwords_used=words)
+                result.update(
+                    audio_id=audio_id,
+                    condition=condition,
+                    hotwords_used=words,
+                    run_signature=signature,
+                )
                 write_json(details_path, result)
             text = result["raw_text"] if condition == "vanilla" else result["merged_text"]
             write_transcription(condition_dir / "asr", audio_id, text)

@@ -3,14 +3,17 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-stage=1
-# The default range reaches Stage 7: one invocation runs all nine experiments.
-stop_stage=10000
+stage=0
+# The default range validates the benchmark, runs all nine experiments, and
+# prints a single target comparison table.
+stop_stage=8
 gpuid=0
 benchmark_dir="${project_root}/hotword_benchmark"
 model="${project_root}/models"
 exp_dir="${project_root}/exp/parakeet_ctcws"
 parakeet_conda_env="parakeet_ctcws"
+parakeet_chunk_seconds=30
+parakeet_auto_variants=false
 nemotron_model="nvidia/nemotron-3.5-asr-streaming-0.6b"
 nemotron_exp_dir="${project_root}/exp/nemotron_gpu_pb"
 nemotron_target_lang="zh-CN"
@@ -18,17 +21,19 @@ nemotron_boosting_tree_alpha=1.0
 nemotron_boosting_context_score=1.0
 nemotron_boosting_depth_scaling=2.0
 nemotron_boosting_bpe_mode="case_insensitive"
+nemotron_chunk_seconds=30
 funasr_model="FunAudioLLM/Fun-ASR-Nano-2512"
 funasr_exp_dir="${project_root}/exp/funasr_nano"
 funasr_language="中文"
-funasr_itn=false
-funasr_vad_model="fsmn-vad"
+funasr_itn=true
+funasr_vad_model="funasr/fsmn-vad"
 funasr_max_single_segment_time=30000
 funasr_batch_size_s=30
 funasr_hub="hf"
 funasr_conda_env="funasr_hotword"
 overwrite=false
 limit=""
+target_mer=0.15
 
 # Kaldi's parse_options.sh normally requires an explicit value for booleans.
 # Accept the conventional standalone --overwrite requested by this runner too.
@@ -59,8 +64,8 @@ fi
 
 # Fail before activating the heavyweight runtime when the requested benchmark
 # cannot possibly run. This also gives a useful error for misspelled paths.
-if (( stage <= 7 && stop_stage >= 2 )); then
-  required_benchmark_files=(hotwords.json all_hotwords.json evaluate.py)
+if (( stage <= 7 && stop_stage >= 0 )); then
+  required_benchmark_files=(hotwords.json all_hotwords.json pseudo_transcripts.json evaluate.py)
   for required_file in "${required_benchmark_files[@]}"; do
     if [[ ! -f "${benchmark_dir}/${required_file}" ]]; then
       echo "run.sh: missing benchmark file: ${benchmark_dir}/${required_file}" >&2
@@ -75,6 +80,11 @@ fi
 
 export PARAKEET_CONDA_ENV="${parakeet_conda_env}"
 export FUNASR_CONDA_ENV="${funasr_conda_env}"
+
+if (( stage <= 0 && stop_stage >= 0 )); then
+  PYTHONPATH="${project_root}${PYTHONPATH:+:${PYTHONPATH}}" \
+    python -m hotword_asr.validate_benchmark --benchmark-dir "${benchmark_dir}"
+fi
 
 if (( stage <= 1 && stop_stage >= 1 )); then
   if ! find "${project_root}/models" -type f -name '*.nemo' -print -quit 2>/dev/null | grep -q .; then
@@ -92,7 +102,11 @@ if (( stage <= 2 && stop_stage >= 2 )); then
       --output-dir "${exp_dir}"
       --device cuda
       --condition all
+      --chunk-seconds "${parakeet_chunk_seconds}"
     )
+    if ${parakeet_auto_variants}; then
+      infer_args+=(--auto-variants)
+    fi
     if [[ -n "${limit}" ]]; then
       infer_args+=(--limit "${limit}")
     fi
@@ -121,6 +135,7 @@ if (( stage <= 4 && stop_stage >= 4 )); then
       --boosting-context-score "${nemotron_boosting_context_score}"
       --boosting-depth-scaling "${nemotron_boosting_depth_scaling}"
       --boosting-bpe-mode "${nemotron_boosting_bpe_mode}"
+      --chunk-seconds "${nemotron_chunk_seconds}"
     )
     if [[ -n "${limit}" ]]; then
       nemotron_args+=(--limit "${limit}")
@@ -155,6 +170,8 @@ if (( stage <= 6 && stop_stage >= 6 )); then
   )
   if ${funasr_itn}; then
     funasr_args+=(--itn)
+  else
+    funasr_args+=(--no-itn)
   fi
   if [[ -n "${limit}" ]]; then
     funasr_args+=(--limit "${limit}")
@@ -170,6 +187,15 @@ if (( stage <= 7 && stop_stage >= 7 )); then
   bash "${project_root}/run_funasr.sh" \
     bash "${project_root}/scripts/evaluate_funasr_benchmark.sh" \
     "${benchmark_dir}" "${funasr_exp_dir}"
+fi
+
+if (( stage <= 8 && stop_stage >= 8 )); then
+  bash "${project_root}/run_parakeet.sh" \
+    python -m hotword_asr.summarize_results \
+      --parakeet-dir "${exp_dir}" \
+      --nemotron-dir "${nemotron_exp_dir}" \
+      --funasr-dir "${funasr_exp_dir}" \
+      --target-mer "${target_mer}"
 fi
 
 if (( stage <= 2 && stop_stage >= 5 )); then

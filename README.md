@@ -27,6 +27,11 @@ decoder input, runtime measurement, and the benchmark's own `evaluate.py`.
 The supplied benchmark discrepancy (`elbew` in `hotwords.json`, `elbow` in
 `all_hotwords.json`) is deliberately not repaired. The runner reports the
 vocabulary difference and passes each source verbatim to its defined condition.
+For the uploaded 71-file benchmark, validation also reports 198 target
+instances, 139 exact global vocabulary entries (135 after case-folding), and 54
+recordings longer than 30 seconds. Its supplied reference report is 81.31%
+hotword recall and 11.53% MER; `run.sh` uses 15% MER as the comparison target,
+while preserving the pseudo-transcript evaluator as the source of truth.
 
 ## Installation and data
 
@@ -106,17 +111,23 @@ One invocation runs and evaluates all nine experiments:
 
 ```bash
 bash run.sh \
-  --stage 2 \
-  --stop-stage 7 \
+  --stage 0 \
+  --stop-stage 8 \
   --gpuid 0 \
-  --benchmark-dir /path/to/hotword_benchmark
+  --benchmark-dir /path/to/hotword_benchmark \
+  --overwrite
 ```
 
-Stages are: (1) Parakeet download, (2) all Parakeet inference, (3) all
+Stages are: (0) benchmark/audio/vocabulary validation, (1) Parakeet download,
+(2) all Parakeet inference, (3) all
 Parakeet evaluation, (4) all Nemotron inference, (5) all Nemotron evaluation,
-(6) all Fun-ASR-Nano inference, and (7) all Fun-ASR-Nano evaluation.
+(6) all Fun-ASR-Nano inference, (7) all Fun-ASR-Nano evaluation, and (8) one
+comparison table for all nine reports against `--target-mer 0.15`.
 `--limit N` selects the same first N IDs for every condition;
-`--overwrite` recomputes each selected condition's own cached result.
+`--overwrite` recomputes each selected condition's own cached result. Cached
+details now include a deterministic run signature, so changing model, chunking,
+VAD, ITN, language, decoder settings, or hotwords cannot silently reuse stale
+transcriptions.
 
 `path.sh` selects an environment from `BACKEND`: `default`, `parakeet`, and
 `nemotron` activate `parakeet_ctcws`, while `funasr` activates
@@ -145,8 +156,9 @@ graphs. Stage 4 likewise loads Nemotron once; GPU-PB is disabled for Vanilla,
 configured once for All Hotwords, and reconfigured from an auditable per-audio
 phrase file for Oracle. Model loading remains outside condition RTF meters.
 Stage 6 similarly makes one `AutoModel` and passes each condition's exact
-audited list through `generate(..., hotwords=...)`; its VAD is `fsmn-vad`, its
-default fixed language is `中文`, and internal ITN is disabled.
+audited list through `generate(..., hotwords=...)`; its default fixed language
+is `中文`, and internal ITN is enabled. With `--hub hf`, the default VAD
+identifier is the Hugging Face model `funasr/fsmn-vad`.
 
 The FunASR VAD pipeline limits each inference batch to 30 accumulated audio
 seconds by default (`--batch-size-s 30`) and clears released CUDA cache between
@@ -154,6 +166,17 @@ files. This avoids batching every VAD segment of a long recording into one LLM
 generation call, while preserving the exact same setting for all conditions.
 Every `model.generate()` call is wrapped in `torch.inference_mode()`, which
 includes `torch.no_grad()` semantics and avoids autograd bookkeeping.
+
+Parakeet and Nemotron use bounded 30-second chunks by default so the benchmark's
+multi-minute recordings do not exceed the input regime used for these runtime
+baselines. Set `--parakeet-chunk-seconds 0` or
+`--nemotron-chunk-seconds 0` only to deliberately test whole-file inference.
+Chunks are non-overlapping, so compare that alternative empirically before
+changing the baseline. The Parakeet context graph uses the supplied hotword
+spellings exactly. Heuristic
+case/acronym/separator variants are available only through `--auto-variants`;
+they are intentionally excluded from the accuracy baseline because a large
+global vocabulary can turn them into false positives.
 
 
 For debugging, all three runners accept `--condition all`, `vanilla`,
@@ -180,6 +203,10 @@ converted GPU-PB phrases in `oracle_hotwords/phrase_files/<id>.txt`.
 Fun-ASR creates no synthetic keyword detections: it preserves raw model text
 and records both `hotwords_used` and the identical `model_hotwords` sent to the
 official inference call in each details file.
+
+Nemotron stores the raw tagged model output for auditing, but removes model
+control tokens such as `<zh-CN>` before Traditional-Chinese conversion and
+evaluation. Those tokens are decoder metadata, not spoken reference content.
 
 Reports are:
 
