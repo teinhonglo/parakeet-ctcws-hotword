@@ -155,6 +155,15 @@ generation call, while preserving the exact same setting for all conditions.
 Every `model.generate()` call is wrapped in `torch.inference_mode()`, which
 includes `torch.no_grad()` semantics and avoids autograd bookkeeping.
 
+Parakeet follows the official NeMo CTC-WS baseline by transcribing each input
+recording as one utterance. Hard, non-overlapping chunking is disabled by
+default because it loses context and may split a hotword at a boundary. Use
+`--chunk-seconds N` only when an utterance cannot fit in GPU memory. The context
+graph also uses the supplied hotword spellings exactly. Heuristic
+case/acronym/separator variants are available only through `--auto-variants`;
+they are intentionally excluded from the accuracy baseline because a large
+global vocabulary can turn them into false positives.
+
 
 For debugging, all three runners accept `--condition all`, `vanilla`,
 `all-hotwords`, or `oracle-hotwords`:
