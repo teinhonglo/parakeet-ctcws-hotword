@@ -51,7 +51,9 @@ def test_run_sh_rejects_inverted_stage_range(tmp_path: Path) -> None:
 def test_run_sh_routes_all_conditions_and_evaluations(tmp_path: Path) -> None:
     benchmark = tmp_path / "benchmark"
     (benchmark / "audio").mkdir(parents=True)
-    for name in ("hotwords.json", "all_hotwords.json", "evaluate.py"):
+    for name in (
+        "hotwords.json", "all_hotwords.json", "pseudo_transcripts.json", "evaluate.py"
+    ):
         (benchmark / name).write_text("{}\n", encoding="utf-8")
 
     fake_bin = tmp_path / "bin"
@@ -80,10 +82,20 @@ fi
     calls = tmp_path / "python-calls.txt"
     conda_envs = tmp_path / "conda-envs.txt"
     python = fake_bin / "python"
-    python.write_text(
-        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$RUN_SH_CALLS\"\n",
-        encoding="utf-8",
-    )
+    python.write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$RUN_SH_CALLS"
+output=""
+per_audio=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output) output="$2"; shift 2 ;;
+    --per-audio-json) per_audio="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -z "$output" ]] || : > "$output"
+[[ -z "$per_audio" ]] || : > "$per_audio"
+''', encoding="utf-8")
     python.chmod(0o755)
     environment = os.environ.copy()
     environment.update(

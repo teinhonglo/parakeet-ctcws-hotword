@@ -10,6 +10,7 @@ from hotword_asr.nemotron_benchmark import (
     configure_greedy_decoding,
     prepare_gpu_pb_hotwords,
 )
+from hotword_asr.text_normalization import strip_model_control_tags
 
 
 class Converter:
@@ -124,3 +125,7 @@ def test_transcription_text_accepts_string_and_hypothesis() -> None:
     hypothesis.text = "洗肾"
     assert _transcription_text("苑里") == "苑里"
     assert _transcription_text(hypothesis) == "洗肾"
+
+
+def test_language_control_tags_are_not_scored_as_transcript() -> None:
+    assert strip_model_control_tags("<zh-CN> 洗肾 <zh-CN> 留置") == "洗肾 留置"

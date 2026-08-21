@@ -19,7 +19,12 @@ from .conditions import (
 )
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
-from .text_normalization import to_simplified_chinese, to_taiwan_traditional
+from .provenance import require_matching_signature, run_signature
+from .text_normalization import (
+    strip_model_control_tags,
+    to_simplified_chinese,
+    to_taiwan_traditional,
+)
 
 
 DEFAULT_MODEL = "nvidia/nemotron-3.5-asr-streaming-0.6b"
@@ -276,12 +281,14 @@ def transcribe_file(
         for text in (_transcription_text(item) for item in hypotheses)
         if text.strip()
     )
-    traditional = to_taiwan_traditional(raw_zh_cn)
+    normalized_zh_cn = strip_model_control_tags(raw_zh_cn)
+    traditional = to_taiwan_traditional(normalized_zh_cn)
     elapsed = time.perf_counter() - started
     return {
         "audio_path": str(audio_path.resolve()),
         "duration_sec": round(duration, 4),
         "raw_zh_cn_text": raw_zh_cn,
+        "normalized_zh_cn_text": normalized_zh_cn,
         "text": traditional,
         "timing": {
             "inference_seconds": round(elapsed, 4),
@@ -303,6 +310,7 @@ def run_condition(
     target_lang: str,
     overwrite: bool,
     hotwords_used: dict[str, list[str]],
+    signature_base: dict[str, Any],
     configure_for_audio: Any | None = None,
 ) -> dict[str, Any]:
     candidate_root = output_dir / "asr"
@@ -319,12 +327,25 @@ def run_condition(
         audio_path = benchmark_dir / "audio" / f"{audio_id}.wav"
         if not audio_path.exists():
             raise FileNotFoundError(audio_path)
+        signature = run_signature(
+            {
+                **signature_base,
+                "condition": condition_name,
+                "audio_id": audio_id,
+                "hotwords": hotwords_used[audio_id],
+            }
+        )
         details_path = details_root / f"{audio_id}.json"
 
         if details_path.exists() and not overwrite:
             from .hotwords import load_json
 
             result = load_json(details_path)
+            require_matching_signature(
+                result,
+                signature,
+                context=f"Nemotron {condition_name} audio {audio_id}",
+            )
             if result.get("hotwords_used") != hotwords_used[audio_id]:
                 raise AssertionError(
                     f"Cached hotword audit mismatch for {condition_name} audio "
@@ -354,8 +375,12 @@ def run_condition(
                 chunk_seconds=chunk_seconds,
                 target_lang=target_lang,
             )
-            result.update(audio_id=audio_id, condition=condition_name,
-                          hotwords_used=hotwords_used[audio_id])
+            result.update(
+                audio_id=audio_id,
+                condition=condition_name,
+                hotwords_used=hotwords_used[audio_id],
+                run_signature=signature,
+            )
             write_json(details_path, result)
             inferred_audio_seconds += float(result["duration_sec"])
             inferred_count += 1
@@ -389,8 +414,8 @@ def main() -> None:
     args = parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
-    if args.chunk_seconds <= 0:
-        raise ValueError("--chunk-seconds must be positive")
+    if args.chunk_seconds < 0:
+        raise ValueError("--chunk-seconds must be non-negative")
     if args.boosting_tree_alpha < 0:
         raise ValueError("--boosting-tree-alpha cannot be negative")
     if args.boosting_context_score <= 0:
@@ -413,6 +438,23 @@ def main() -> None:
 
     print(f"Loading model: {args.model}")
     model = load_model(args.model, args.device)
+    signature_base = {
+        "backend": "nemotron_gpu_pb",
+        "model": args.model,
+        "device": args.device,
+        "target_lang": args.target_lang,
+        "batch_size": args.batch_size,
+        "chunk_seconds": args.chunk_seconds,
+        "decoding": {
+            "strategy": "greedy_batch",
+            "boosting_tree_alpha": args.boosting_tree_alpha,
+            "context_score": args.boosting_context_score,
+            "depth_scaling": args.boosting_depth_scaling,
+            "bpe_mode": args.boosting_bpe_mode,
+        },
+        "use_lhotse": False,
+        "output_normalization": "strip-control-tags+OpenCC-s2tw",
+    }
     runtime_metrics_path = output_dir / "runtime_metrics.json"
     runtime_metrics: dict[str, Any] = {}
     if runtime_metrics_path.exists():
@@ -460,7 +502,8 @@ def main() -> None:
             benchmark_dir=benchmark_dir, output_dir=condition_dir, device=args.device,
             batch_size=args.batch_size, chunk_seconds=args.chunk_seconds,
             target_lang=args.target_lang, overwrite=args.overwrite,
-            hotwords_used=used, configure_for_audio=configure_for_audio)
+            hotwords_used=used, signature_base=signature_base,
+            configure_for_audio=configure_for_audio)
 
     run_config = {
         "model": args.model,
@@ -492,7 +535,9 @@ def main() -> None:
         },
         "batch_size": args.batch_size,
         "chunk_seconds": args.chunk_seconds,
-        "candidate_schema": {"text": "OpenCC s2tw transcription"},
+        "candidate_schema": {
+            "text": "language control tags removed, then OpenCC s2tw"
+        },
         "evaluator": str(benchmark_dir / "evaluate.py"),
     }
     write_json(output_dir / "run_config.json", run_config)

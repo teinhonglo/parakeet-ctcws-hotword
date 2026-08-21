@@ -6,9 +6,9 @@ import soundfile as sf
 from hotword_asr.engine import CTCWSConfig, _write_chunks
 
 
-def test_accuracy_baseline_uses_whole_recordings_and_exact_hotwords() -> None:
+def test_accuracy_baseline_uses_bounded_chunks_and_exact_hotwords() -> None:
     config = CTCWSConfig()
-    assert config.chunk_seconds == 0.0
+    assert config.chunk_seconds == 30.0
     assert config.auto_variants is False
 
 

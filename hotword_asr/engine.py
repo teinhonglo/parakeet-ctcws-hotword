@@ -19,10 +19,10 @@ class CTCWSConfig:
     beam_threshold: float = 7.0
     context_score: float = 3.0
     ctc_ali_token_weight: float = 0.5
-    # The official NeMo CTC-WS recipe transcribes each utterance as one item.
-    # Chunking is opt-in because hard, non-overlapping cuts discard acoustic
-    # context and can split both ordinary words and hotwords at a boundary.
-    chunk_seconds: float = 0.0
+    # These recordings average 92 seconds and reach 660 seconds. Keep the
+    # established bounded-memory condition explicit and consistent with the
+    # Nemotron benchmark instead of silently attempting whole-file inference.
+    chunk_seconds: float = 30.0
     batch_size: int = 8
     # Keep the benchmark graph faithful to the supplied vocabulary by default.
     # Heuristic acronym/separator variants can substantially increase false

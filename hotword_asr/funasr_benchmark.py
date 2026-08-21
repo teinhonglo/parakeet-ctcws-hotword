@@ -17,6 +17,7 @@ from .conditions import (
 from .hotwords import compare_vocabularies, load_hotword_list, load_hotword_map
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
+from .provenance import require_matching_signature, run_signature
 from .text_normalization import to_taiwan_traditional
 
 
@@ -31,8 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--condition", choices=("all", "vanilla", "all-hotwords", "oracle-hotwords"), default="all")
     parser.add_argument("--language", default="中文")
-    parser.add_argument("--itn", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--vad-model", default="fsmn-vad")
+    parser.add_argument("--itn", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--vad-model",
+        default="funasr/fsmn-vad",
+        help="Use the hub-specific model ID; funasr/fsmn-vad is the HF ID",
+    )
     parser.add_argument("--max-single-segment-time", type=int, default=30000)
     parser.add_argument(
         "--batch-size-s", type=float, default=30.0,
@@ -142,6 +147,18 @@ def run_benchmark(
         args.model, args.device, args.vad_model,
         args.max_single_segment_time, args.hub,
     )
+    signature_base = {
+        "backend": "funasr_nano",
+        "model": args.model,
+        "device": args.device,
+        "language": args.language,
+        "itn": args.itn,
+        "hub": args.hub,
+        "vad_model": args.vad_model,
+        "max_single_segment_time": args.max_single_segment_time,
+        "batch_size_s": args.batch_size_s,
+        "output_normalization": "OpenCC-s2tw",
+    }
     runtimes: dict[str, Any] = {}
     labels = {
         "vanilla": "Vanilla",
@@ -165,6 +182,14 @@ def run_benchmark(
                 raise FileNotFoundError(audio_path)
             details_path = condition_dir / "details" / f"{audio_id}.json"
             expected = used[audio_id]
+            signature = run_signature(
+                {
+                    **signature_base,
+                    "condition": condition,
+                    "audio_id": audio_id,
+                    "hotwords": expected,
+                }
+            )
             if details_path.exists() and not args.overwrite:
                 from .hotwords import load_json
                 result = load_json(details_path)
@@ -173,6 +198,11 @@ def run_benchmark(
                     raise AssertionError(f"Cached details condition mismatch for {audio_id}")
                 if result.get("model_hotwords") != expected:
                     raise AssertionError(f"Cached model hotword mismatch for {condition} audio {audio_id}")
+                require_matching_signature(
+                    result,
+                    signature,
+                    context=f"Fun-ASR {condition} audio {audio_id}",
+                )
                 print(f"[{condition} {index:02d}/{len(audio_ids)}] {audio_id}: skip existing")
             else:
                 # This exact list is both sent to the model and retained in both audits.
@@ -190,11 +220,14 @@ def run_benchmark(
                     language=args.language, itn=args.itn,
                     batch_size_s=args.batch_size_s,
                     evaluation_text=evaluation_text,
+                    run_signature=signature,
                 )
                 write_json(details_path, result)
                 inferred_seconds += float(result["duration_sec"])
                 inferred_count += 1
-            write_transcription(condition_dir / "asr", audio_id, result["raw_text"])
+            write_transcription(
+                condition_dir / "asr", audio_id, result["evaluation_text"]
+            )
             per_audio[audio_id] = result["timing"]
             dataset_seconds += float(result["duration_sec"])
         runtime = meter.stop(inferred_seconds)
