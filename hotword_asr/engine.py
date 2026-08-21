@@ -19,9 +19,15 @@ class CTCWSConfig:
     beam_threshold: float = 7.0
     context_score: float = 3.0
     ctc_ali_token_weight: float = 0.5
-    chunk_seconds: float = 30.0
+    # The official NeMo CTC-WS recipe transcribes each utterance as one item.
+    # Chunking is opt-in because hard, non-overlapping cuts discard acoustic
+    # context and can split both ordinary words and hotwords at a boundary.
+    chunk_seconds: float = 0.0
     batch_size: int = 8
-    auto_variants: bool = True
+    # Keep the benchmark graph faithful to the supplied vocabulary by default.
+    # Heuristic acronym/separator variants can substantially increase false
+    # positives when a large global hotword list is used.
+    auto_variants: bool = False
 
 
 def _hypothesis_dict(hyp: Any) -> dict[str, Any]:
@@ -81,9 +87,11 @@ def _load_audio(path: Path, target_sr: int = 16000) -> tuple[np.ndarray, int]:
 def _write_chunks(
     audio: np.ndarray, sample_rate: int, chunk_seconds: float, directory: Path
 ) -> list[tuple[Path, float, float]]:
-    if chunk_seconds <= 0:
-        raise ValueError("chunk_seconds must be > 0")
-    chunk_samples = max(1, int(round(chunk_seconds * sample_rate)))
+    if chunk_seconds < 0:
+        raise ValueError("chunk_seconds must be >= 0")
+    chunk_samples = (
+        len(audio) if chunk_seconds == 0 else max(1, int(round(chunk_seconds * sample_rate)))
+    )
     chunks: list[tuple[Path, float, float]] = []
     for index, start in enumerate(range(0, len(audio), chunk_samples)):
         end = min(start + chunk_samples, len(audio))
