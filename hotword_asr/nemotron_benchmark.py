@@ -20,6 +20,7 @@ from .conditions import (
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .provenance import require_matching_signature, run_signature
+from .selection import select_audio_ids
 from .text_normalization import (
     strip_model_control_tags,
     to_simplified_chinese,
@@ -87,8 +88,14 @@ def parse_args() -> argparse.Namespace:
         choices=("all", "vanilla", "all-hotwords", "oracle-hotwords"),
         default="all",
     )
-    parser.add_argument(
+    subset = parser.add_mutually_exclusive_group()
+    subset.add_argument(
         "--limit", type=int, default=None, help="Run only the first N files"
+    )
+    subset.add_argument(
+        "--audio-ids-file",
+        type=Path,
+        help="One audio ID per line; intended for a held-out tuning subset",
     )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -432,9 +439,11 @@ def main() -> None:
     if vocabulary_check["missing_from_vocabulary"] or vocabulary_check["extra_in_vocabulary"]:
         print("WARNING: hotwords.json and all_hotwords.json differ:", vocabulary_check)
 
-    audio_ids = sorted(hotword_map, key=int)
-    if args.limit is not None:
-        audio_ids = audio_ids[: args.limit]
+    audio_ids = select_audio_ids(
+        sorted(hotword_map, key=int),
+        limit=args.limit,
+        audio_ids_file=args.audio_ids_file,
+    )
 
     print(f"Loading model: {args.model}")
     model = load_model(args.model, args.device)

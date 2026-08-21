@@ -27,8 +27,10 @@ funasr_exp_dir="${project_root}/exp/funasr_nano"
 funasr_language="中文"
 funasr_itn=true
 funasr_vad_model="funasr/fsmn-vad"
-funasr_max_single_segment_time=30000
+funasr_max_single_segment_time=15000
 funasr_batch_size_s=30
+funasr_max_length=512
+funasr_truncate_repetition=true
 funasr_hub="hf"
 funasr_conda_env="funasr_hotword"
 overwrite=false
@@ -166,12 +168,18 @@ if (( stage <= 6 && stop_stage >= 6 )); then
     --vad-model "${funasr_vad_model}"
     --max-single-segment-time "${funasr_max_single_segment_time}"
     --batch-size-s "${funasr_batch_size_s}"
+    --max-length "${funasr_max_length}"
     --hub "${funasr_hub}"
   )
   if ${funasr_itn}; then
     funasr_args+=(--itn)
   else
     funasr_args+=(--no-itn)
+  fi
+  if ${funasr_truncate_repetition}; then
+    funasr_args+=(--truncate-repetition)
+  else
+    funasr_args+=(--no-truncate-repetition)
   fi
   if [[ -n "${limit}" ]]; then
     funasr_args+=(--limit "${limit}")
@@ -195,7 +203,8 @@ if (( stage <= 8 && stop_stage >= 8 )); then
       --parakeet-dir "${exp_dir}" \
       --nemotron-dir "${nemotron_exp_dir}" \
       --funasr-dir "${funasr_exp_dir}" \
-      --target-mer "${target_mer}"
+      --target-mer "${target_mer}" \
+      --output-json "${project_root}/exp/benchmark_summary.json"
 fi
 
 if (( stage <= 2 && stop_stage >= 5 )); then
