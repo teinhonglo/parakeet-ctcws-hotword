@@ -18,10 +18,39 @@ from .hotwords import compare_vocabularies, load_hotword_list, load_hotword_map
 from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .provenance import require_matching_signature, run_signature
+from .selection import select_audio_ids
 from .text_normalization import to_taiwan_traditional
 
 
 DEFAULT_MODEL = "FunAudioLLM/Fun-ASR-Nano-2512"
+DEFAULT_MAX_SINGLE_SEGMENT_TIME = 15000
+DEFAULT_MAX_LENGTH = 512
+
+
+def truncate_repetition(
+    text: str, min_repeat_len: int = 3, max_repeats: int = 3
+) -> str:
+    """Truncate runaway repeated spans using FunASR's production guard.
+
+    This intentionally mirrors the guard in FunASR's official Nano vLLM
+    service.  It keeps one copy of the first span observed three times in a
+    row.  Short strings are left alone so ordinary conversational repetition
+    is not touched.
+    """
+    if min_repeat_len <= 0:
+        raise ValueError("min_repeat_len must be positive")
+    if max_repeats < 2:
+        raise ValueError("max_repeats must be at least 2")
+    if not text or len(text) < 20:
+        return text
+
+    length_limit = min(len(text) // max_repeats, 30)
+    for length in range(min_repeat_len, length_limit):
+        for start in range(len(text) - length * max_repeats):
+            chunk = text[start : start + length]
+            if text[start : start + length * max_repeats] == chunk * max_repeats:
+                return text[: start + length]
+    return text
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,13 +67,41 @@ def parse_args() -> argparse.Namespace:
         default="funasr/fsmn-vad",
         help="Use the hub-specific model ID; funasr/fsmn-vad is the HF ID",
     )
-    parser.add_argument("--max-single-segment-time", type=int, default=30000)
+    parser.add_argument(
+        "--max-single-segment-time",
+        type=int,
+        default=DEFAULT_MAX_SINGLE_SEGMENT_TIME,
+        help=(
+            "Maximum VAD segment length in milliseconds. FunASR documents "
+            "15-second chunks as the stable long-audio setting for Nano."
+        ),
+    )
     parser.add_argument(
         "--batch-size-s", type=float, default=30.0,
         help="Maximum accumulated VAD audio seconds per inference batch",
     )
     parser.add_argument("--hub", default="hf")
-    parser.add_argument("--limit", type=int)
+    parser.add_argument(
+        "--max-length",
+        type=int,
+        default=DEFAULT_MAX_LENGTH,
+        help="Maximum new LLM tokens generated for each inference segment",
+    )
+    parser.add_argument(
+        "--truncate-repetition",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply the repetition guard used by FunASR's official Nano service",
+    )
+    parser.add_argument("--repetition-min-length", type=int, default=3)
+    parser.add_argument("--repetition-max-repeats", type=int, default=3)
+    subset = parser.add_mutually_exclusive_group()
+    subset.add_argument("--limit", type=int)
+    subset.add_argument(
+        "--audio-ids-file",
+        type=Path,
+        help="One audio ID per line; intended for a held-out tuning subset",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -77,6 +134,10 @@ def transcribe_file(
     language: str,
     itn: bool,
     batch_size_s: float,
+    max_length: int,
+    truncate_repetitions: bool,
+    repetition_min_length: int,
+    repetition_max_repeats: int,
 ) -> dict[str, Any]:
     import torch
 
@@ -92,6 +153,8 @@ def transcribe_file(
             hotwords=hotwords,
             itn=itn,
             batch_size_s=batch_size_s,
+            max_length=max_length,
+            llm_kwargs={"do_sample": False},
         )
     elapsed = time.perf_counter() - started
     if not isinstance(result, list) or len(result) != 1 or not isinstance(result[0], dict):
@@ -99,6 +162,16 @@ def transcribe_file(
     text = result[0].get("text")
     if not isinstance(text, str):
         raise TypeError("FunASR result dictionary does not contain string field 'text'")
+
+    decoded_text = (
+        truncate_repetition(
+            text,
+            min_repeat_len=repetition_min_length,
+            max_repeats=repetition_max_repeats,
+        )
+        if truncate_repetitions
+        else text
+    )
         
     # FunASR's VAD path can leave large temporary generation buffers in the
     # CUDA caching allocator. Release them before the next audio/condition;
@@ -112,6 +185,15 @@ def transcribe_file(
         "audio_path": str(audio_path.resolve()),
         "duration_sec": round(duration, 4),
         "raw_text": text,
+        "decoded_text": decoded_text,
+        "repetition_guard": {
+            "enabled": truncate_repetitions,
+            "changed": decoded_text != text,
+            "min_repeat_length": repetition_min_length,
+            "max_repeats": repetition_max_repeats,
+            "raw_characters": len(text),
+            "decoded_characters": len(decoded_text),
+        },
         "timing": {
             "inference_seconds": round(elapsed, 4),
             "rtf": round(elapsed / duration, 6) if duration else None,
@@ -124,13 +206,16 @@ def run_benchmark(
     *,
     model_loader: Callable[..., Any] = load_model,
 ) -> None:
-    if args.limit is not None and args.limit <= 0:
-        raise ValueError("--limit must be positive")
     if args.max_single_segment_time <= 0:
         raise ValueError("--max-single-segment-time must be positive")
-        
     if args.batch_size_s <= 0:
         raise ValueError("--batch-size-s must be positive")
+    if args.max_length <= 0:
+        raise ValueError("--max-length must be positive")
+    if args.repetition_min_length <= 0:
+        raise ValueError("--repetition-min-length must be positive")
+    if args.repetition_max_repeats < 2:
+        raise ValueError("--repetition-max-repeats must be at least 2")
 
     benchmark_dir = args.benchmark_dir.resolve()
     output_dir = args.output_dir.resolve()
@@ -138,9 +223,11 @@ def run_benchmark(
     all_hotwords = load_hotword_list(benchmark_dir / "all_hotwords.json")
     vocabulary_check = compare_vocabularies(hotword_map, all_hotwords)
     write_json(output_dir / "benchmark_vocabulary_check.json", vocabulary_check)
-    audio_ids = sorted(hotword_map, key=int)
-    if args.limit is not None:
-        audio_ids = audio_ids[: args.limit]
+    audio_ids = select_audio_ids(
+        sorted(hotword_map, key=int),
+        limit=args.limit,
+        audio_ids_file=args.audio_ids_file,
+    )
 
     print(f"Loading Fun-ASR model once: {args.model}")
     model = model_loader(
@@ -157,7 +244,15 @@ def run_benchmark(
         "vad_model": args.vad_model,
         "max_single_segment_time": args.max_single_segment_time,
         "batch_size_s": args.batch_size_s,
-        "output_normalization": "OpenCC-s2tw",
+        "max_length": args.max_length,
+        "llm_kwargs": {"do_sample": False},
+        "repetition_guard": {
+            "enabled": args.truncate_repetition,
+            "min_repeat_length": args.repetition_min_length,
+            "max_repeats": args.repetition_max_repeats,
+            "source": "FunASR official Nano service",
+        },
+        "output_normalization": "repetition-guard+OpenCC-s2tw",
     }
     runtimes: dict[str, Any] = {}
     labels = {
@@ -212,13 +307,19 @@ def run_benchmark(
                     model, audio_path, hotwords=model_hotwords,
                     language=args.language, itn=args.itn,
                     batch_size_s=args.batch_size_s,
+                    max_length=args.max_length,
+                    truncate_repetitions=args.truncate_repetition,
+                    repetition_min_length=args.repetition_min_length,
+                    repetition_max_repeats=args.repetition_max_repeats,
                 )
-                evaluation_text = to_taiwan_traditional(result["raw_text"])
+                evaluation_text = to_taiwan_traditional(result["decoded_text"])
                 result.update(
                     audio_id=audio_id, condition=condition,
                     hotwords_used=list(expected), model_hotwords=model_hotwords,
                     language=args.language, itn=args.itn,
                     batch_size_s=args.batch_size_s,
+                    max_length=args.max_length,
+                    llm_kwargs={"do_sample": False},
                     evaluation_text=evaluation_text,
                     run_signature=signature,
                 )
@@ -244,6 +345,17 @@ def run_benchmark(
         "vad_model": args.vad_model,
         "vad_kwargs": {"max_single_segment_time": args.max_single_segment_time},
         "batch_size_s": args.batch_size_s,
+        "max_length": args.max_length,
+        "llm_kwargs": {"do_sample": False},
+        "repetition_guard": {
+            "enabled": args.truncate_repetition,
+            "min_repeat_length": args.repetition_min_length,
+            "max_repeats": args.repetition_max_repeats,
+            "source": (
+                "https://github.com/modelscope/FunASR/blob/main/examples/"
+                "industrial_data_pretraining/fun_asr_nano/serve_vllm.py"
+            ),
+        },
         "conditions": {
             "vanilla": {"hotword_source": None},
             "all_hotwords": {"hotword_source": "all_hotwords.json", "scope": "global"},

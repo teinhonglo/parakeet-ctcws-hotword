@@ -17,6 +17,7 @@ from .io import write_json, write_transcription
 from .metrics import RuntimeMeter
 from .model import load_ctc_model
 from .provenance import require_matching_signature, run_signature
+from .selection import select_audio_ids
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,7 +49,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--limit", type=int)
+    subset = parser.add_mutually_exclusive_group()
+    subset.add_argument("--limit", type=int)
+    subset.add_argument(
+        "--audio-ids-file",
+        type=Path,
+        help="One audio ID per line; intended for a held-out tuning subset",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -66,8 +73,11 @@ def run_benchmark(args: argparse.Namespace) -> None:
     write_json(output_dir / "benchmark_vocabulary_check.json", check)
     if check["missing_from_vocabulary"] or check["extra_in_vocabulary"]:
         print("WARNING: hotwords.json and all_hotwords.json differ:", check)
-    audio_ids = sorted(hotword_map, key=int)
-    if args.limit is not None: audio_ids = audio_ids[:args.limit]
+    audio_ids = select_audio_ids(
+        sorted(hotword_map, key=int),
+        limit=args.limit,
+        audio_ids_file=args.audio_ids_file,
+    )
     conditions = normalize_condition(args.condition)
     aliases = load_aliases(args.aliases)
     config = CTCWSConfig(

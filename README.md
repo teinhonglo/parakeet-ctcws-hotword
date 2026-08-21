@@ -160,12 +160,17 @@ audited list through `generate(..., hotwords=...)`; its default fixed language
 is `中文`, and internal ITN is enabled. With `--hub hf`, the default VAD
 identifier is the Hugging Face model `funasr/fsmn-vad`.
 
-The FunASR VAD pipeline limits each inference batch to 30 accumulated audio
-seconds by default (`--batch-size-s 30`) and clears released CUDA cache between
-files. This avoids batching every VAD segment of a long recording into one LLM
-generation call, while preserving the exact same setting for all conditions.
-Every `model.generate()` call is wrapped in `torch.inference_mode()`, which
-includes `torch.no_grad()` semantics and avoids autograd bookkeeping.
+The FunASR VAD pipeline limits individual segments to 15 seconds and each
+inference batch to 30 accumulated audio seconds by default
+(`--max-single-segment-time 15000 --batch-size-s 30`). The 15-second setting is
+the stable long-audio recommendation in FunASR's own Nano runtime notes. The
+runner also fixes `do_sample=false`, keeps the raw output, and applies the same
+three-repeat truncation guard used by the
+[official Nano service](https://github.com/modelscope/FunASR/blob/main/examples/industrial_data_pretraining/fun_asr_nano/serve_vllm.py).
+This prevents a single VAD segment from filling a long transcript with repeated
+tokens or a prompted hotword. `--no-truncate-repetition` provides an auditable
+ablation. Released CUDA cache is cleared between files, and every
+`model.generate()` call is wrapped in `torch.inference_mode()`.
 
 Parakeet and Nemotron use bounded 30-second chunks by default so the benchmark's
 multi-minute recordings do not exceed the input regime used for these runtime
@@ -177,6 +182,39 @@ spellings exactly. Heuristic
 case/acronym/separator variants are available only through `--auto-variants`;
 they are intentionally excluded from the accuracy baseline because a large
 global vocabulary can turn them into false positives.
+
+## Decoder tuning without test-set leakage
+
+The CTC-WS and GPU-PB values in `run.sh` are starting points, not universal
+optima. NVIDIA's CTC-WS documentation explicitly recommends a grid over beam
+threshold, context score, and CTC-alignment weight; GPU-PB likewise requires
+`boosting_tree_alpha` to be tuned for the data.
+
+Create a text file containing one audio ID per line from a development set that
+will not be used for the final reported score, then run:
+
+```bash
+bash scripts/tune_hotword_decoders.sh \
+  /path/to/hotword_benchmark \
+  /path/to/parakeet-model.nemo \
+  /path/to/dev_ids.txt \
+  exp/decoder_tuning \
+  0
+```
+
+The Parakeet grid defaults to NVIDIA's documented 27 combinations:
+`beam_threshold={7,8,9}`, `context_score={3,4,5}`, and
+`ctc_ali_token_weight={0.5,0.6,0.7}`. Nemotron evaluates
+`boosting_tree_alpha={0.5,1,2,4}` while retaining NVIDIA's recommended context
+score and depth scaling. Environment variables listed inside the script can
+override either grid. Each run is scored by importing the benchmark's own
+`evaluate.py`; `tuning_summary.json` ranks lowest development MER first and
+uses hotword recall only as the tie-breaker.
+
+Do not use Oracle Hotwords or the final 71-file benchmark scores to choose
+parameters. Oracle is a diagnostic upper bound that uses ground truth at
+inference time, and selecting against the reported test set would make the
+result optimistic.
 
 
 For debugging, all three runners accept `--condition all`, `vanilla`,
@@ -226,3 +264,8 @@ exp/funasr_nano/report_hotword_oracle_hotwords_asr.xlsx
 hyperparameters. `runtime_metrics.json` records each condition separately,
 including audio duration/count, wall time, RTF, throughput, process/GPU peaks,
 and per-audio timing.
+
+The Stage 8 comparison also writes `exp/benchmark_summary.json` and reports the
+MER delta from each model's own Vanilla baseline. This makes a contextual
+decoder regression visible even when the absolute MER is dominated by the base
+recognizer.

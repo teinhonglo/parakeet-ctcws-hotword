@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .io import write_json
+
 
 REPORTS = (
     ("Parakeet", "Vanilla", "parakeet", "report_vanilla_asr.xlsx"),
@@ -40,28 +42,60 @@ def main() -> None:
     parser.add_argument("--nemotron-dir", type=Path, required=True)
     parser.add_argument("--funasr-dir", type=Path, required=True)
     parser.add_argument("--target-mer", type=float, default=0.15)
+    parser.add_argument("--output-json", type=Path)
     args = parser.parse_args()
 
-    print("Model       Condition         Recall     MER       <= target")
-    print("----------- ----------------- ---------- --------- ---------")
+    print("Model       Condition         Recall     MER       MER delta  <= target")
+    print("----------- ----------------- ---------- --------- ---------- ---------")
     missing = []
     roots = {
         "parakeet": args.parakeet_dir,
         "nemotron": args.nemotron_dir,
         "funasr": args.funasr_dir,
     }
+    results = []
     for model, condition, root_name, filename in REPORTS:
         path = roots[root_name] / filename
         if not path.exists():
             missing.append(str(path))
             continue
         recall, mer = _metrics(path)
-        print(
-            f"{model:11s} {condition:17s} {recall:9.2%} {mer:9.2%} "
-            f"{'YES' if mer <= args.target_mer else 'NO'}"
+        results.append(
+            {
+                "model": model,
+                "condition": condition,
+                "report": str(path.resolve()),
+                "hotword_recall": recall,
+                "mer": mer,
+            }
         )
     if missing:
         raise FileNotFoundError("Missing canonical reports:\n  " + "\n  ".join(missing))
+
+    vanilla = {
+        row["model"]: row["mer"] for row in results if row["condition"] == "Vanilla"
+    }
+    for row in results:
+        row["mer_delta_vs_vanilla"] = row["mer"] - vanilla[row["model"]]
+        row["meets_target"] = row["mer"] <= args.target_mer
+        print(
+            f"{row['model']:11s} {row['condition']:17s} "
+            f"{row['hotword_recall']:9.2%} {row['mer']:9.2%} "
+            f"{row['mer_delta_vs_vanilla']:+9.2%} "
+            f"{'YES' if row['meets_target'] else 'NO'}"
+        )
+    if args.output_json is not None:
+        write_json(
+            args.output_json,
+            {
+                "target_mer": args.target_mer,
+                "note": (
+                    "MER is measured against the benchmark's ASR-generated pseudo "
+                    "transcripts, not human ground-truth transcripts."
+                ),
+                "results": results,
+            },
+        )
 
 
 if __name__ == "__main__":
